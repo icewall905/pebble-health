@@ -23,7 +23,9 @@ data class DaySummary(
 data class Night(
     val night: String,
     val sleepS: Int,
-    val restfulS: Int,
+    /** Null when the night was estimated from minute data and has no restful split. */
+    val restfulS: Int?,
+    val estimated: Boolean,
     val onset: Long?,
     val wake: Long?,
     val sleepIntervals: List<Pair<Long, Long>>,
@@ -188,7 +190,8 @@ data class Dashboard(
         private fun night(e: JsonElement) = Night(
             night = e.str("night") ?: "",
             sleepS = e.int("sleep_s") ?: 0,
-            restfulS = e.int("restful_s") ?: 0,
+            restfulS = e.int("restful_s"),
+            estimated = e.str("source") == "estimated_minutes",
             onset = e.lng("onset"),
             wake = e.lng("wake"),
             sleepIntervals = intervals(e.arr("sleep_intervals")),

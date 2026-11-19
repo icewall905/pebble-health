@@ -49,6 +49,7 @@ class DashboardParseTest {
         assertEquals(26940, d.lastNight?.sleepS)
         assertEquals(2, d.lastNight?.sleepIntervals?.size)
         assertEquals(1, d.lastNight?.restfulIntervals?.size, "malformed interval dropped")
+        assertEquals(false, d.lastNight?.estimated)
         assertEquals(6.0, d.intensityDays.single().total)
         assertEquals("a", d.briefing.single().highlights.single())
         assertEquals(3.3, d.hrCoveragePct)

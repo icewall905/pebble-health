@@ -231,9 +231,9 @@ private fun LazyListScope.sleepDetail(d: Dashboard) {
             StatRow("Duration" to (d.sleep.duration?.toString() ?: "—"), "Regularity" to (d.sleep.regularity?.toString() ?: "—"),
                 "Need" to Fmt.hm(d.sleep.needS))
             Spacer(Modifier.height(12.dp))
-            BarChart(nights.takeLast(14).map { n -> Bar(Fmt.dayTiny(LocalDate.parse(n.night)), n.sleepS / 3600.0, "restful ${Fmt.hm(n.restfulS)}") },
+            BarChart(nights.takeLast(14).map { n -> Bar(Fmt.dayTiny(LocalDate.parse(n.night)), n.sleepS / 3600.0, if (n.estimated) "estimated" else "restful ${Fmt.hm(n.restfulS)}") },
                 m.sleep.copy(alpha = 0.55f), goal = (d.sleep.needS ?: 28800) / 3600.0, valueText = { "${Fmt.dec(it)} h" },
-                labelEvery = 2, stacked = nights.takeLast(14).map { it.restfulS / 3600.0 }, stackedColor = m.restful)
+                labelEvery = 2, stacked = nights.takeLast(14).map { it.restfulS?.div(3600.0) }, stackedColor = m.restful)
             Note("Dark: restful sleep as labelled by the watch. Nights without a recording are absent, not zero.")
         }
     }
@@ -242,7 +242,7 @@ private fun LazyListScope.sleepDetail(d: Dashboard) {
         PhCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(Fmt.dayShort(LocalDate.parse(n.night)), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                Text(Fmt.hm(n.sleepS), style = MaterialTheme.typography.titleMedium)
+                Text(Fmt.hm(n.sleepS) + if (n.estimated) " · est." else "", style = MaterialTheme.typography.titleMedium)
             }
             if (n.onset != null && n.wake != null) {
                 SleepTimeline(n.onset, n.wake, n.sleepIntervals, n.restfulIntervals, Modifier.padding(top = 8.dp), height = 22.dp)

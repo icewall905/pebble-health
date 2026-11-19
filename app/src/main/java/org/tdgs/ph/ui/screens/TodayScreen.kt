@@ -42,6 +42,7 @@ import org.tdgs.ph.data.Prefs
 import org.tdgs.ph.data.Repository
 import org.tdgs.ph.ui.Fmt
 import org.tdgs.ph.ui.components.BigValue
+import org.tdgs.ph.ui.components.Note
 import org.tdgs.ph.ui.components.CardHeader
 import org.tdgs.ph.ui.components.PhCard
 import org.tdgs.ph.ui.components.Pill
@@ -207,8 +208,9 @@ private fun SleepCard(d: Dashboard, onClick: () -> Unit) {
         if (n.onset != null && n.wake != null) {
             SleepTimeline(n.onset, n.wake, n.sleepIntervals, n.restfulIntervals, Modifier.padding(top = 12.dp), height = 28.dp)
         }
-        StatRow("Restful" to Fmt.hm(n.restfulS), "Light" to Fmt.hm((n.sleepS - n.restfulS).coerceAtLeast(0)),
+        StatRow("Restful" to Fmt.hm(n.restfulS), "Light" to Fmt.hm(n.restfulS?.let { (n.sleepS - it).coerceAtLeast(0) }),
             "Regularity" to (d.sleep.regularity?.let { "$it" } ?: "—"))
+        if (n.estimated) Note("Estimated from quiet minutes: the watch exported no complete sleep session for this night.")
     }
 }
 
