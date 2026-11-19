@@ -1,0 +1,75 @@
+name: Build
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      - name: Install SDK components
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
+      - name: Test, lint and assemble
+        run: ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease --no-configuration-cache
+      - name: Upload lint report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lint
+          path: app/build/reports/lint-results-release.html
+          if-no-files-found: ignore
+      - name: Sign and verify
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PH_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.PH_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PH_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PH_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$KEYSTORE_BASE64" && test -n "$STORE_PASSWORD" && test -n "$KEY_ALIAS" && test -n "$KEY_PASSWORD"
+          private_dir="$(mktemp -d "$RUNNER_TEMP/signing.XXXXXX")"
+          trap 'rm -rf "$private_dir"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$private_dir/release.jks"
+          printf '%s' "$STORE_PASSWORD" > "$private_dir/store-password"
+          printf '%s' "$KEY_PASSWORD" > "$private_dir/key-password"
+          mkdir -p dist
+          bt="$ANDROID_HOME/build-tools/37.0.0"
+          "$bt/apksigner" sign --ks "$private_dir/release.jks" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "file:$private_dir/store-password" --key-pass "file:$private_dir/key-password" \
+            --out dist/PebbleHealth.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          "$bt/apksigner" verify --verbose --print-certs dist/PebbleHealth.apk | tee dist/signature.txt
+          grep -qiF "$(tr -d '\r\n' < docs/signing-sha256.txt)" dist/signature.txt
+          "$bt/aapt2" dump badging dist/PebbleHealth.apk > dist/package.txt
+          grep -q "package: name='org.tdgs.ph'" dist/package.txt
+          if grep -q '^application-debuggable' dist/package.txt; then exit 1; fi
+          (cd dist && sha256sum PebbleHealth.apk > SHA256SUMS)
+      - name: Publish release for Obtainium
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/PebbleHealth.apk dist/SHA256SUMS dist/signature.txt \
+            --repo "$GITHUB_REPOSITORY" --title "Pebble Health ${GITHUB_REF_NAME#v}" \
+            --notes "Signed APK. Certificate SHA-256: $(cat docs/signing-sha256.txt)" --verify-tag

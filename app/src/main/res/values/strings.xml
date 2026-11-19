@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Pebble Health</string>
+    <string name="widget_label">Today</string>
+    <string name="widget_description">Steps, sleep, heart rate and watch battery</string>
+</resources>
