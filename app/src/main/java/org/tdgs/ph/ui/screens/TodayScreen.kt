@@ -104,14 +104,19 @@ fun TodayScreen(repo: Repository, open: (String) -> Unit) {
                 }
             }
         }
-        d.briefing.firstOrNull()?.let { b ->
-            item {
-                val m = LocalMetrics.current
-                PhCard(onClick = { open("insights") }) {
-                    CardHeader("Insight", Icons.Rounded.AutoAwesome, m.readiness, d.briefingDay)
-                    Spacer(Modifier.height(8.dp))
-                    b.headline?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
-                    b.summary?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = m.muted, modifier = Modifier.padding(top = 4.dp)) }
+        item {
+            val m = LocalMetrics.current
+            val preview = (d.briefing.firstOrNull { it.key == "patterns" } ?: d.briefing.firstOrNull { it.key == "today" })
+                ?.takeUnless { d.briefingNeedsRefresh }
+            PhCard(onClick = { open("insights") }) {
+                CardHeader("Personal patterns", Icons.Rounded.AutoAwesome, m.readiness, d.briefingDay.takeIf { preview != null })
+                Spacer(Modifier.height(8.dp))
+                if (preview != null) {
+                    preview.headline?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
+                    preview.summary?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = m.muted) }
+                } else {
+                    Text("Compare recent readings with your personal baseline and review your activity plan.",
+                        style = MaterialTheme.typography.bodyMedium, color = m.muted)
                 }
             }
         }

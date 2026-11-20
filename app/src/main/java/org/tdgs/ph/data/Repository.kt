@@ -1,6 +1,7 @@
 package org.tdgs.ph.data
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,6 +17,11 @@ data class UiState(
     val fetchedAt: Long? = null,
 )
 
+data class InsightsState(
+    val report: InsightsReport? = null,
+    val error: String? = null,
+)
+
 /**
  * Single source of the dashboard model. The last good response is cached in
  * app-private storage so the app and widget open instantly and work offline.
@@ -23,6 +29,10 @@ data class UiState(
 class Repository(context: Context, val settings: Settings, private val api: Api = Api()) {
     private val cacheFile = File(context.filesDir, "dashboard.json")
     private val mutex = Mutex()
+    private val insightsMutex = Mutex()
+    private val insightsFile = File(context.filesDir, "insights.json")
+    private val _insights = MutableStateFlow(InsightsState())
+    val insights: StateFlow<InsightsState> = _insights.asStateFlow()
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
     private val intradayCache = HashMap<String, Intraday>()
@@ -55,6 +65,33 @@ class Repository(context: Context, val settings: Settings, private val api: Api 
         result
     }
 
+    suspend fun refreshInsights() = insightsMutex.withLock {
+        val cfg = settings.current() ?: return@withLock
+        if (_insights.value.report == null && insightsFile.exists()) {
+            runCatching { InsightsReport.parse(insightsFile.readText()) }.onSuccess {
+                _insights.value = InsightsState(report = it)
+            }
+        }
+        _insights.value = _insights.value.copy(error = null)
+        try {
+            val text = api.insights(cfg)
+            val parsed = InsightsReport.parse(text)
+            if (settings.current() != cfg) return@withLock
+            runCatching { insightsFile.writeText(text) }
+            _insights.value = InsightsState(report = parsed)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            if (settings.current() != cfg) return@withLock
+            val message = when ((error as? ApiException)?.status) {
+                404 -> "Update your hub to use personal patterns."
+                401, 403 -> "Personal patterns require a hub API token with history:read access."
+                else -> "Could not refresh personal patterns."
+            }
+            _insights.value = _insights.value.copy(error = message)
+        }
+    }
+
     suspend fun intraday(date: LocalDate): Result<Intraday> {
         intradayCache[date.toString()]?.let { return Result.success(it) }
         val cfg = settings.current() ?: return Result.failure(ApiException("Hub not configured"))
@@ -72,6 +109,8 @@ class Repository(context: Context, val settings: Settings, private val api: Api 
 
     fun forget() {
         cacheFile.delete()
+        insightsFile.delete()
+        _insights.value = InsightsState()
         intradayCache.clear()
         dailyCache.clear()
         _state.value = UiState()

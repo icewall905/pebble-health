@@ -48,7 +48,14 @@ data class OxygenDay(val date: String, val mean: Double?, val min: Double?, val 
 data class WeightEntry(val date: String, val kg: Double, val trendKg: Double?)
 data class StressPoint(val ts: Long, val score: Int?)
 data class StressDay(val date: String, val score: Int?)
-data class BriefingPage(val key: String, val headline: String?, val summary: String?, val focus: String?, val highlights: List<String>)
+data class BriefingPage(
+    val key: String,
+    val headline: String?,
+    val summary: String?,
+    val focus: String?,
+    val highlights: List<String>,
+    val dataNotes: List<String>,
+)
 data class IntensityDay(val date: String, val moderate: Double?, val vigorous: Double?, val total: Double?)
 
 data class Dashboard(
@@ -82,6 +89,8 @@ data class Dashboard(
     val workouts: List<Workout>,
     val briefing: List<BriefingPage>,
     val briefingDay: String?,
+    val briefingNeedsRefresh: Boolean,
+    val patternsBriefingStatus: String?,
     val intensityWeek: Double?,
     val intensityGoal: Double?,
     val intensityDays: List<IntensityDay>,
@@ -147,6 +156,8 @@ data class Dashboard(
                 workouts = o.arr("workouts").mapNotNull(::workout).sortedByDescending { it.start },
                 briefing = briefing(o.obj("briefing")),
                 briefingDay = o.obj("briefing").str("day"),
+                briefingNeedsRefresh = o.obj("briefing").bool("requires_refresh") == true,
+                patternsBriefingStatus = o.obj("briefing").obj("grounding").str("patterns_status"),
                 intensityWeek = intensity.dbl("last_7_days"),
                 intensityGoal = intensity.dbl("goal"),
                 intensityDays = intensity.arr("days").mapNotNull { d ->
@@ -219,10 +230,15 @@ data class Dashboard(
 
         private fun briefing(e: JsonObject?): List<BriefingPage> {
             val pages = e.obj("pages") ?: return emptyList()
-            return listOf("today", "sleep", "recovery", "training", "more").mapNotNull { key ->
+            return listOf("today", "patterns", "sleep", "recovery", "training", "more").mapNotNull { key ->
                 val p = pages.obj(key) ?: return@mapNotNull null
-                BriefingPage(key, p.str("headline"), p.str("summary"), p.str("focus"),
-                    p.arr("highlights").mapNotNull { h -> h.str("text") ?: h.str("detail") ?: h.str("label") })
+                val headline = p.str("headline")?.takeIf { it.isNotBlank() }
+                val summary = p.str("summary")?.takeIf { it.isNotBlank() }
+                if (headline == null && summary == null) return@mapNotNull null
+                BriefingPage(key, headline, summary, p.str("focus")?.takeIf { it.isNotBlank() },
+                    p.arr("highlights").mapNotNull { h -> h.str("text") ?: h.str("detail") ?: h.str("label") },
+                    p.arr("data_notes").mapNotNull { note -> (note as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.takeIf { it.isString && it.content.isNotBlank() }?.content })
             }
         }
 

@@ -17,6 +17,8 @@ class Api(private val client: OkHttpClient = defaultClient) {
 
     suspend fun dashboard(cfg: HubConfig, days: Int = 42): String = get(cfg, "dashboard") { addQueryParameter("days", days.toString()) }
 
+    suspend fun insights(cfg: HubConfig): String = get(cfg, "insights") {}
+
     suspend fun daily(cfg: HubConfig, from: LocalDate, to: LocalDate): String =
         get(cfg, "daily") { addQueryParameter("from", from.toString()); addQueryParameter("to", to.toString()) }
 

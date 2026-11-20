@@ -75,7 +75,7 @@ private fun Main(repo: Repository) {
             composable("today") { TodayScreen(repo, open = { nav.navigate(it) }) }
             composable("activities") { ActivitiesScreen(repo, open = { nav.navigate("activity/$it") }) }
             composable("trends") { TrendsScreen(repo, open = { nav.navigate(it) }) }
-            composable("insights") { InsightsScreen(repo) }
+            composable("insights") { InsightsScreen(repo, open = { nav.navigate(it) }) }
             composable("settings") { SettingsScreen(repo) }
             composable("metric/{name}") { e ->
                 MetricDetailScreen(repo, e.arguments?.getString("name") ?: "steps", back = { nav.popBackStack() })

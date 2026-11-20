@@ -16,6 +16,9 @@ Not affiliated with Core Devices, Pebble or any wearable vendor. Not a medical d
   SpO₂, weight and battery history
 - **Activities** grouped by week, with heart-rate and cadence charts
 - **Trends**: weekly averages for 12 weeks to a year, step-goal calendar
+- **Insights** compares recent measurements with personal baselines, shows coverage and dated readings,
+  and brings together weekly intensity planning, a backtested step estimate, and the hub’s AI Patterns briefing.
+  The most recent report is saved on the device for offline use.
 - Home-screen widget, background refresh every 30 minutes, offline cache
 - Dark and light themes
 
@@ -55,6 +58,7 @@ The app reads these hub endpoints (documented in the hub's
 | `/api/v1/dashboard?days=` | Today, sleep, HRV, readiness, stress, activities, insights |
 | `/api/v1/daily?from&to` | Week, month and year charts, and trends |
 | `/api/v1/intraday?date=` | Day charts (HR, steps, sleep) |
+| `/api/v1/insights` | Personal baselines, evidence charts, coverage and activity planning (`history:read`) |
 
 Metrics marked "Estimate" come from wrist data that the hub derives in documented ways.
 See [METRICS.md](https://github.com/icewall905/gravelex/blob/master/health-hub/METRICS.md).
