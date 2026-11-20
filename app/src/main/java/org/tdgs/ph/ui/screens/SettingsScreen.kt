@@ -44,6 +44,8 @@ import org.tdgs.ph.ui.components.PhCard
 import org.tdgs.ph.ui.components.Segmented
 import org.tdgs.ph.ui.theme.LocalMetrics
 import org.tdgs.ph.widget.RefreshWorker
+import org.tdgs.ph.workout.WorkoutEntry
+import org.tdgs.ph.workout.WorkoutUploadDialog
 
 @Composable
 fun SettingsScreen(repo: Repository) {
@@ -53,6 +55,8 @@ fun SettingsScreen(repo: Repository) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val m = LocalMetrics.current
+    var workoutSettings by remember { mutableStateOf(false) }
+    if (workoutSettings) WorkoutUploadDialog(repo) { workoutSettings = false }
     Page(repo, "Settings") {
         item {
             PhCard {
@@ -84,6 +88,7 @@ fun SettingsScreen(repo: Repository) {
                     Button(onClick = { scope.launch { repo.refresh(); RefreshWorker.updateWidgets(context) } }) { Text("Refresh now") }
                     OutlinedButton(onClick = { scope.launch { repo.settings.clear(); repo.forget() } }) { Text("Disconnect") }
                 }
+                OutlinedButton(onClick = { workoutSettings = true }) { Text("Workout upload token") }
             }
         }
         item {
@@ -98,7 +103,7 @@ fun SettingsScreen(repo: Repository) {
             }
         }
         item {
-            Text("Pebble Health ${appVersion(context)} · reads your self-hosted hub only. Not a medical device.",
+            Text("Pebble Health ${appVersion(context)} · connects to your self-hosted hub. Not a medical device.",
                 style = MaterialTheme.typography.bodySmall, color = m.muted, modifier = Modifier.padding(4.dp))
         }
     }
@@ -152,5 +157,6 @@ fun SetupScreen(repo: Repository) {
             Text("The token is encrypted with a key held in the phone's secure keystore.",
                 style = MaterialTheme.typography.bodySmall, color = m.muted)
         }
+        WorkoutEntry()
     }
 }

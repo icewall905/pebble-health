@@ -38,7 +38,8 @@ data class SleepScore(val night: String?, val score: Int?, val sleepS: Int?, val
 data class Score(val score: Int?, val status: String?, val reason: String?)
 
 data class Workout(val id: String, val start: Long, val seconds: Int, val kind: String, val rpe: Double?,
-                   val hrCoverage: Double?, val load: Double?, val excluded: Boolean)
+                   val hrCoverage: Double?, val load: Double?, val excluded: Boolean,
+                   val activeSeconds: Int? = null, val distanceM: Double? = null)
 
 data class Battery(val percent: Int?, val lastPercent: Int?, val observedAt: Long?, val status: String?,
                    val runtimeHours: Double?, val series: List<Pair<Long, Int>>)
@@ -225,7 +226,8 @@ data class Dashboard(
             val id = e.str("id") ?: return null
             val start = e.lng("start") ?: return null
             return Workout(id, start, e.int("seconds") ?: 0, e.str("kind") ?: "workout", e.dbl("rpe"),
-                e.dbl("hr_coverage"), e.dbl("load"), e.bool("excluded") == true || (e.int("ignored") ?: 0) != 0)
+                e.dbl("hr_coverage"), e.dbl("load"), e.bool("excluded") == true || (e.int("ignored") ?: 0) != 0,
+                e.int("active_seconds"), e.dbl("distance_m"))
         }
 
         private fun briefing(e: JsonObject?): List<BriefingPage> {

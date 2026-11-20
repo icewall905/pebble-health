@@ -1,5 +1,13 @@
 package org.tdgs.ph.ui.screens
 
+import android.content.Intent
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.tdgs.ph.workout.WorkoutActivity
+import org.tdgs.ph.workout.WorkoutEntry
+import org.tdgs.ph.workout.WorkoutStore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +64,7 @@ fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
     val state by repo.state.collectAsState()
     val d = state.dashboard
     Page(repo, "Activities", d?.let { "${it.workouts.size} in the last 6 weeks" }) {
+        item { WorkoutEntry() }
         if (d == null) { item { Loading() }; return@Page }
         if (d.workouts.isEmpty()) { item { Empty("No activities recorded yet") }; return@Page }
         val zone = Fmt.zone(d.tz)
@@ -94,17 +103,45 @@ fun ActivityDetailScreen(repo: Repository, id: String, back: () -> Unit) {
     val state by repo.state.collectAsState()
     val d = state.dashboard
     val w = d?.workouts?.firstOrNull { it.id == id }
+    val context = LocalContext.current
+    val phoneWorkout = w?.id?.startsWith("phone:") == true
+    val localId = w?.id?.removePrefix("phone:")
+    var hasLocalWorkout by remember(id) { mutableStateOf(false) }
+    LaunchedEffect(localId, phoneWorkout) {
+        if (phoneWorkout && localId != null) {
+            hasLocalWorkout = withContext(Dispatchers.IO) {
+                runCatching { WorkoutStore.get(context).contains(localId) }.getOrDefault(false)
+            }
+        }
+    }
     var intraday by remember { mutableStateOf<List<Intraday>?>(null) }
     LaunchedEffect(id, d?.tz) {
-        if (w == null || d == null) return@LaunchedEffect
+        if (w == null || phoneWorkout) return@LaunchedEffect
         val zone = Fmt.zone(d.tz)
         val first = Instant.ofEpochSecond(w.start).atZone(zone).toLocalDate()
         val last = Instant.ofEpochSecond(w.start + w.seconds).atZone(zone).toLocalDate()
         val days = generateSequence(first) { it.plusDays(1) }.takeWhile { it <= last }.toList()
         intraday = days.mapNotNull { repo.intraday(it).getOrNull() }
     }
-    Page(repo, w?.let { Fmt.kind(it.kind) } ?: "Activity", w?.let { Fmt.dateTime(it.start, d!!.tz) }, back = back) {
-        if (w == null || d == null) { item { Empty("Activity not found") }; return@Page }
+    Page(repo, w?.let { Fmt.kind(it.kind) } ?: "Activity", w?.let { Fmt.dateTime(it.start, d.tz) }, back = back) {
+        if (w == null) { item { Empty("Activity not found") }; return@Page }
+        if (phoneWorkout) {
+            item {
+                PhCard {
+                    BigValue(Fmt.hm(w.activeSeconds ?: w.seconds), sub = "Active time")
+                    StatRow("Distance" to (w.distanceM?.let { "${Fmt.dec(it / 1000, 2)} km" } ?: "—"),
+                        "HR coverage" to (w.hrCoverage?.let { "${Fmt.int(it * 100)}%" } ?: "—"),
+                        "Load" to Fmt.int(w.load))
+                    if (hasLocalWorkout && localId != null) {
+                        TextButton(onClick = {
+                            context.startActivity(Intent(context, WorkoutActivity::class.java)
+                                .putExtra("history", true).putExtra("workout_id", localId))
+                        }) { Text("Open recording") }
+                    }
+                }
+            }
+            return@Page
+        }
         item {
             val m = LocalMetrics.current
             val pts = intraday?.flatMap { it.points }?.filter { it.ts >= w.start && it.ts < w.start + w.seconds }

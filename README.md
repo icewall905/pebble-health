@@ -15,6 +15,8 @@ Not affiliated with Core Devices, Pebble or any wearable vendor. Not a medical d
   resting trend) and calories; sleep nights with restful segments; stress, readiness,
   SpO₂, weight and battery history
 - **Activities** grouped by week, with heart-rate and cadence charts
+- **Log workout** with phone GPS, Bluetooth chest-strap heart rate, laps and strength sets.
+  Review routes, splits and charts, save GPX files, and send workout summaries to your hub.
 - **Trends**: weekly averages for 12 weeks to a year, step-goal calendar
 - **Insights** compares recent measurements with personal baselines, shows coverage and dated readings,
   and brings together weekly intensity planning, a backtested step estimate, and the hub’s AI Patterns briefing.
@@ -24,10 +26,10 @@ Not affiliated with Core Devices, Pebble or any wearable vendor. Not a medical d
 
 ## Requirements
 
-You need a running health hub that receives data from GravelEx. The
+The dashboard needs a running health hub that receives data from GravelEx. The
 [self-hosting guide](https://github.com/icewall905/gravelex/blob/master/docs/SELF-HOSTING.md)
 covers the server, the phone export, the recommended watch settings and the HRV watch app.
-The app only reads from the hub, so it shows nothing until the hub has data.
+Phone workout recording and local history are available without a hub.
 
 - Android 10 (API 29) or newer
 - The hub reachable over **HTTPS** from the phone, through a reverse proxy or a VPN
@@ -65,6 +67,18 @@ See [METRICS.md](https://github.com/icewall905/gravelex/blob/master/health-hub/M
 Empty cards mean the hub has no data for them yet; they do not mean zero. The self-hosting
 guide's timeline lists when each metric first appears.
 
+## Record a workout
+
+Open **Activities → Log workout**, choose a sport, and turn on phone GPS if you want a route.
+Wear your Bluetooth chest strap and tap **Find chest strap** to select it. Workout history
+and GPX export are available offline.
+
+To send summaries to the hub, create a separate history upload token from the PebbleFit web
+dashboard with **Create upload token**, then enter it under **Settings → Workout upload token**.
+Choose **Send to PebbleFit** from a saved workout. The app sends elapsed and active time,
+distance, effort, and heart-rate summaries to `POST /fitness/phone-workouts`. GPS coordinates
+and strength sets stay on the phone. The dashboard token remains read-only.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -93,6 +107,7 @@ Code layout (`app/src/main/java/org/tdgs/ph/`):
 | `data/` | API client (OkHttp), JSON parsing, models, encrypted settings, repository with offline cache |
 | `ui/screens/` | Today, metric details, activities, trends, insights, settings and setup |
 | `ui/components/` | Charts and cards |
+| `workout/` | Phone recording, local history, charts, GPX, and upload setup |
 | `widget/` | Glance home-screen widget and the WorkManager refresh job |
 
 ## Releasing your own fork
