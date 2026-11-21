@@ -6,6 +6,8 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.tdgs.ph.planner.WorkoutPlannerActivity
+import org.tdgs.ph.workout.ActivityTrainerReview
+import org.tdgs.ph.workout.TrainerReviewEntry
 import org.tdgs.ph.workout.WorkoutActivity
 import org.tdgs.ph.workout.WorkoutEntry
 import org.tdgs.ph.workout.WorkoutStore
@@ -217,8 +219,14 @@ fun ActivityDetailScreen(repo: Repository, id: String, back: () -> Unit) {
         val days = generateSequence(first) { it.plusDays(1) }.takeWhile { it <= last }.toList()
         intraday = days.mapNotNull { repo.intraday(it).getOrNull() }
     }
+    var trainerReview by rememberSaveable(id) { mutableStateOf(false) }
+    if (trainerReview && w != null) {
+        ActivityTrainerReview(repo, Fmt.kind(w.kind), hubId = id, back = { trainerReview = false })
+        return
+    }
     Page(repo, w?.let { Fmt.kind(it.kind) } ?: "Activity", w?.let { Fmt.dateTime(it.start, d.tz) }, back = back) {
         if (w == null) { item { Empty("Activity not found") }; return@Page }
+        item { TrainerReviewEntry { trainerReview = true } }
         if (phoneWorkout) {
             item {
                 PhCard {

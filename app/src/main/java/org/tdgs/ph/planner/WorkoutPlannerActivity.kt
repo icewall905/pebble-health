@@ -421,7 +421,7 @@ private fun PlannerScreen(api: PlannerApi, settingsFirst: Boolean, reminder: Str
 }
 
 @Composable
-private fun PlannerLogin(busy: Boolean, login: (String, String) -> Unit) {
+internal fun PlannerLogin(busy: Boolean, login: (String, String) -> Unit) {
     var user by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

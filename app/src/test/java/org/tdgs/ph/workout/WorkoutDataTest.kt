@@ -1,6 +1,7 @@
 package org.tdgs.ph.workout
 
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.xml.sax.InputSource
 import java.io.StringReader
@@ -33,6 +34,27 @@ class WorkoutDataTest {
         assertTrue(workoutSeries(detail).splits.isEmpty())
         assertFalse(detail.copy(workout = workout.copy(manualDistance = null)).pebbleFitPayload()
             .containsKey("distance_m"))
+    }
+
+    @Test
+    fun trainerKeepsElapsedGapsAndSplitsGpsAroundMinuteBoundaries() {
+        val workout = Workout("review", Sport.run, 1000, 191_000, 90_000)
+        val first = fix(56_000, 0, 0.0)
+        val route = listOf(first, first.copy(time = 66_000, meters = 100.0),
+            first.copy(time = 188_000, segment = 1, meters = 100.0))
+        val heart = listOf(Pulse(0, 140, 1000, 0), Pulse(500, 160, 1500, 0), Pulse(501, 150, 1501, 0))
+        val evidence = WorkoutDetail(workout, route, heart, emptyList(), emptyList()).trainerEvidence()
+        val minutes = evidence.getValue("minutes").jsonArray
+
+        assertEquals("90", evidence.getValue("active_seconds").jsonPrimitive.content)
+        assertEquals(4, minutes.size)
+        assertEquals("50", minutes[0].jsonObject.getValue("distance_m").jsonPrimitive.content)
+        assertEquals("160", minutes[0].jsonObject.getValue("peak_hr").jsonPrimitive.content)
+        assertEquals("1", minutes[0].jsonObject.getValue("hr_seconds").jsonPrimitive.content)
+        assertEquals("50", minutes[1].jsonObject.getValue("distance_m").jsonPrimitive.content)
+        assertTrue(minutes[2].jsonObject.isEmpty())
+        assertFalse(minutes[3].jsonObject.containsKey("distance_m"))
+        assertFalse(evidence.containsKey("route"))
     }
 
     @Test

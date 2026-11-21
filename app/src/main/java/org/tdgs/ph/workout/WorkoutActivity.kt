@@ -98,6 +98,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
     var saving by remember { mutableStateOf(false) }
     var history by rememberSaveable { mutableStateOf(openHistory) }
     var detailId by rememberSaveable { mutableStateOf(initialId) }
+    var trainerReview by rememberSaveable(detailId) { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     val storeResult by produceState<Result<WorkoutStore>?>(null) {
         value = withContext(Dispatchers.IO) { runCatching { WorkoutStore.get(context) } }
@@ -124,6 +125,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
     val back = {
         when {
             live != null -> close()
+            trainerReview -> trainerReview = false
             detailId != null && initialId != null -> close()
             detailId != null -> detailId = null
             history -> history = false
@@ -134,7 +136,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (!trainerReview || live != null) TopAppBar(
                 title = { Text(title, fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
@@ -155,7 +157,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
                 storeResult?.isFailure == true -> Text("Workout storage is unavailable.", Modifier.padding(20.dp))
                 store == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 recording != null -> Recording(recording)
-                detailId != null -> Review(repo, store, detailId!!, snackbar) {
+                detailId != null -> Review(repo, store, detailId!!, snackbar, trainerReview, { trainerReview = it }) {
                     detailId = null
                     refresh++
                 }
@@ -461,7 +463,10 @@ private fun History(store: WorkoutStore, refresh: Int, open: (String) -> Unit) {
 }
 
 @Composable
-private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: SnackbarHostState, back: () -> Unit) {
+private fun Review(
+    repo: Repository, store: WorkoutStore, id: String, snackbar: SnackbarHostState,
+    trainerReview: Boolean, showTrainerReview: (Boolean) -> Unit, back: () -> Unit,
+) {
     val uploadConfig by repo.settings.workoutUploadConfig.collectAsState(initial = null)
     val dashboard = repo.state.collectAsState().value.dashboard
     var uploadSettings by remember { mutableStateOf(false) }
@@ -504,6 +509,10 @@ private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: 
         return
     }
     val workout = detail.workout
+    if (trainerReview) {
+        ActivityTrainerReview(repo, workout.title ?: workout.sport.label, detail = detail, back = { showTrainerReview(false) })
+        return
+    }
     val uploaded = workout.uploaded || dashboard?.workouts?.any { it.id == "phone:${workout.id}" } == true
     val calories = dashboard?.let { data ->
         val workoutDay = Instant.ofEpochMilli(workout.start).atZone(Fmt.zone(data.tz)).toLocalDate().toString()
@@ -604,6 +613,7 @@ private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: 
                         BreakdownRow("${index + 1}. ${set.exercise}", "${set.reps} reps" + (set.kg?.let { "  ·  $it kg" } ?: ""))
                     }
                 }
+                if (selected == "Overview") item { TrainerReviewEntry { showTrainerReview(true) } }
                 if (selected == "Overview" && workout.notes != null) item {
                     Text("Notes", style = MaterialTheme.typography.titleMedium)
                     Text(workout.notes)
