@@ -28,6 +28,7 @@ class Settings(private val context: Context) {
     private val urlKey = stringPreferencesKey("hub_url")
     private val tokenKey = stringPreferencesKey("hub_token_enc")
     private val uploadTokenKey = stringPreferencesKey("workout_upload_token_enc")
+    private val plannerSessionKey = stringPreferencesKey("planner_session_enc")
     private val stepGoalKey = intPreferencesKey("step_goal")
     private val sleepGoalKey = intPreferencesKey("sleep_goal_h")
     private val themeKey = stringPreferencesKey("theme")
@@ -63,13 +64,27 @@ class Settings(private val context: Context) {
 
     suspend fun current(): HubConfig? = config.first()
 
+    suspend fun plannerCookie(origin: String): String? =
+        context.store.data.first()[plannerSessionKey]
+            ?.let { runCatching { decrypt(it, PLANNER_ALIAS) }.getOrNull() }
+            ?.takeIf { it.substringBefore('\n') == origin }
+            ?.substringAfter('\n')
+
+    suspend fun savePlannerCookie(origin: String, cookie: String?) = context.store.edit {
+        if (cookie == null) it.remove(plannerSessionKey)
+        else it[plannerSessionKey] = encrypt("$origin\n$cookie", PLANNER_ALIAS)
+    }
+
     suspend fun save(config: HubConfig) {
         val encrypted = encrypt(config.token)
         context.store.edit {
             if (it[urlKey] != config.baseUrl || it[tokenKey]?.let { value ->
                     runCatching { decrypt(value) }.getOrNull()
                 } != config.token
-            ) it.remove(uploadTokenKey)
+            ) {
+                it.remove(uploadTokenKey)
+                it.remove(plannerSessionKey)
+            }
             it[urlKey] = config.baseUrl
             it[tokenKey] = encrypted
         }
@@ -79,6 +94,7 @@ class Settings(private val context: Context) {
         it.remove(urlKey)
         it.remove(tokenKey)
         it.remove(uploadTokenKey)
+        it.remove(plannerSessionKey)
     }
 
     suspend fun setStepGoal(v: Int) = context.store.edit { it[stepGoalKey] = v.coerceIn(1000, 50000) }
@@ -114,5 +130,6 @@ class Settings(private val context: Context) {
     private companion object {
         const val ALIAS = "hub_token"
         const val UPLOAD_ALIAS = "workout_upload_token"
+        const val PLANNER_ALIAS = "planner_session"
     }
 }
