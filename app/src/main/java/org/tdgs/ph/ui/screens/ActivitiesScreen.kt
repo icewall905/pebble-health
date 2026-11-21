@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,7 @@ import org.tdgs.ph.ui.Fmt
 import org.tdgs.ph.ui.components.Bar
 import org.tdgs.ph.ui.components.BarChart
 import org.tdgs.ph.ui.components.BigValue
+import org.tdgs.ph.ui.components.CardHeader
 import org.tdgs.ph.ui.components.Note
 import org.tdgs.ph.ui.components.PhCard
 import org.tdgs.ph.ui.components.Pill
@@ -69,7 +71,8 @@ fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
         item { WorkoutEntry() }
         item {
             PhCard(onClick = { context.startActivity(Intent(context, WorkoutPlannerActivity::class.java)) }) {
-                Text("Workout planner", style = MaterialTheme.typography.titleMedium)
+                CardHeader("Workout planner", Icons.Rounded.DateRange, LocalMetrics.current.steps)
+                Note("Your training calendar and Trainer")
             }
         }
         if (d == null) { item { Loading() }; return@Page }

@@ -1,7 +1,5 @@
 package org.tdgs.ph.planner
 
-import android.app.DatePickerDialog
-import android.app.TimePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -11,6 +9,30 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerLayoutType
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.saveable.rememberSaveable
+import org.tdgs.ph.ui.components.Note
+import org.tdgs.ph.ui.components.Segmented
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -18,6 +40,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -25,9 +48,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -46,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -56,11 +78,14 @@ import org.tdgs.ph.data.Api
 import org.tdgs.ph.data.Prefs
 import org.tdgs.ph.ui.components.PhCard
 import org.tdgs.ph.ui.theme.PhTheme
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 private val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm")
 private val workoutId = Regex("[a-f0-9]{32}")
@@ -69,6 +94,7 @@ private fun body(vararg values: Pair<String, Any?>) = JSONObject(mapOf(*values))
 internal class WorkoutPlannerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val settings = (application as PhApp).repository.settings
         val fromReminder = intent.getStringExtra("workout_id")?.takeIf(workoutId::matches)
         setContent {
@@ -95,24 +121,27 @@ internal class WorkoutPlannerActivity : ComponentActivity() {
 
 private enum class Section(val label: String) { CALENDAR("Calendar"), TRAINER("Trainer"), SETTINGS("Settings") }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlannerScreen(api: PlannerApi, settingsFirst: Boolean, reminder: String?, back: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val locale = LocalConfiguration.current.locales[0]
     var state by remember(api) { mutableStateOf<JSONObject?>(null) }
-    var month by remember(api) { mutableStateOf(YearMonth.now()) }
-    var history by remember(api) { mutableStateOf(emptyList<JSONObject>()) }
-    var section by remember(api) {
+    var dateOverride by rememberSaveable(api) { mutableStateOf<String?>(null) }
+    var calendarView by rememberSaveable(api) { mutableStateOf(CalendarView.MONTH) }
+    var history by remember(api) { mutableStateOf(emptyMap<YearMonth, List<JSONObject>>()) }
+    var historyError by remember(api) { mutableStateOf(false) }
+    var section by rememberSaveable(api) {
         mutableStateOf(if (settingsFirst) Section.SETTINGS else if (reminder != null) Section.TRAINER else Section.CALENDAR)
     }
-    var selected by remember(api) { mutableStateOf(reminder) }
+    var selected by rememberSaveable(api) { mutableStateOf(reminder) }
     var busy by remember(api) { mutableStateOf(false) }
     var needsLogin by remember(api) { mutableStateOf(false) }
     var notice by remember(api) { mutableStateOf("") }
     var edit by remember(api) { mutableStateOf<JSONObject?>(null) }
     var delete by remember(api) { mutableStateOf<JSONObject?>(null) }
-    var message by remember(api) { mutableStateOf("") }
+    var message by rememberSaveable(api) { mutableStateOf("") }
 
     fun run(action: suspend () -> Unit) {
         if (busy) return
@@ -152,48 +181,135 @@ private fun PlannerScreen(api: PlannerApi, settingsFirst: Boolean, reminder: Str
         }
     }
 
+    val data = state
+    val timezone = runCatching { ZoneId.of(data?.optString("timezone").orEmpty()) }.getOrDefault(ZoneId.systemDefault())
+    val today = LocalDate.now(timezone)
+    val day = dateOverride?.let(LocalDate::parse) ?: today
+    val month = YearMonth.from(day)
+    val weekStart = day.startOfWeek(locale)
+    val historyMonths = when (calendarView) {
+        CalendarView.WEEK -> setOf(YearMonth.from(weekStart), YearMonth.from(weekStart.plusDays(6)))
+        CalendarView.MONTH -> {
+            val gridStart = month.atDay(1).startOfWeek(locale)
+            val gridEnd = month.atEndOfMonth().startOfWeek(locale).plusDays(6)
+            setOf(YearMonth.from(gridStart), month, YearMonth.from(gridEnd))
+        }
+        CalendarView.AGENDA -> setOf(month)
+    }
+    val planned = remember(data) { data?.objects("workouts").orEmpty() }
+    val calendar = remember(planned, history, historyMonths) {
+        calendarWorkouts(planned, historyMonths.flatMap { history[it].orEmpty() })
+    }
+    val current = planned.firstOrNull { it.optString("id") == selected }
+    val ready = data?.optBoolean("trainer_ready") == true
+    val turns = remember(data) { data?.objects("messages").orEmpty() }
+    val proposals = remember(data) { data?.objects("options").orEmpty() }
+    val showingTrainer = data != null && section == Section.TRAINER
+    val trainerList = rememberLazyListState()
+    val plannerList = rememberLazyListState()
+    var accountMenu by remember { mutableStateOf(false) }
+
     LaunchedEffect(api) { run { state = api.load() } }
-    LaunchedEffect(api, month, state != null) {
-        history = emptyList()
-        if (state != null) {
-            try {
-                history = api.history(month.toString()).objects("workouts")
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                notice = "Recorded workouts could not be loaded."
+    LaunchedEffect(api, timezone, historyMonths, data != null && section == Section.CALENDAR) {
+        historyError = false
+        history = emptyMap()
+        if (data != null && section == Section.CALENDAR) {
+            for (period in historyMonths.sortedBy { if (it == month) 0 else 1 }) {
+                try {
+                    history = history + (period to api.history(period.toString()).objects("workouts"))
+                } catch (error: PlannerLoginRequired) {
+                    state = null
+                    needsLogin = true
+                    break
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    historyError = true
+                }
             }
         }
     }
+    LaunchedEffect(showingTrainer, turns.lastOrNull()?.toString(), proposals.lastOrNull()?.toString()) {
+        if (showingTrainer && (turns.isNotEmpty() || proposals.isNotEmpty())) {
+            val welcomeCount = if (turns.isEmpty()) 1 else 0
+            val latest = if (proposals.isNotEmpty()) turns.size + welcomeCount else turns.lastIndex
+            trainerList.scrollToItem(latest)
+        }
+    }
 
-    Scaffold { padding ->
-        LazyColumn(
-            Modifier.padding(padding).imePadding().padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = back) { Text("Back") }
-                    if (state != null) TextButton(enabled = !busy, onClick = {
-                        run {
-                            api.logout()
-                            state = null
-                            needsLogin = true
+    Scaffold(
+        modifier = Modifier.imePadding(),
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = { Text("Workout planner") },
+                    navigationIcon = {
+                        IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    },
+                    actions = {
+                        if (data != null) Box {
+                            IconButton(enabled = !busy, onClick = { accountMenu = true }) {
+                                Icon(Icons.Rounded.MoreVert, "Planner account")
+                            }
+                            DropdownMenu(accountMenu, { accountMenu = false }) {
+                                DropdownMenuItem(text = { Text("Sign out") }, onClick = {
+                                    accountMenu = false
+                                    run {
+                                        api.logout()
+                                        message = ""
+                                        selected = null
+                                        dateOverride = null
+                                        state = null
+                                        needsLogin = true
+                                    }
+                                })
+                            }
                         }
-                    }) { Text("Sign out") }
+                    },
+                )
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (notice.isNotBlank()) {
+                    Text(notice, Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
                 }
-                Text("Workout planner", style = MaterialTheme.typography.headlineSmall)
-                if (notice.isNotBlank()) Text(notice, color = MaterialTheme.colorScheme.primary)
-                if (busy) CircularProgressIndicator(Modifier.padding(top = 8.dp))
+                if (data != null) {
+                    Segmented(Section.entries.map { it.label }, section.ordinal, {
+                        val next = Section.entries[it]
+                        if (next != section && next != Section.TRAINER) plannerList.requestScrollToItem(0)
+                        section = next
+                    }, Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                }
             }
-            val data = state
+        },
+        bottomBar = {
+            if (showingTrainer) {
+                TrainerComposer(
+                    current, ready, busy, message, { message = it.take(3000) }, { selected = null },
+                    send = { send("chat", "message" to message, "workout_id" to selected, done = { message = "" }) },
+                    suggest = { send("chat", "message" to "Suggest plans based on my saved setup and recent health.") },
+                    reschedule = {
+                        send("chat", "message" to message.ifBlank { "Move this workout to another suitable day." },
+                            "workout_id" to selected, "reschedule" to true, done = { message = "" })
+                    },
+                )
+            }
+        },
+    ) { padding ->
+        LazyColumn(
+            Modifier.padding(padding).fillMaxSize(),
+            state = if (showingTrainer) trainerList else plannerList,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             if (data == null) {
                 if (needsLogin) item {
-                    PlannerLogin(busy) { username, password ->
-                        run {
-                            api.login(username, password)
-                            state = api.load()
-                            needsLogin = false
+                    PhCard {
+                        PlannerLogin(busy) { username, password ->
+                            run {
+                                api.login(username, password)
+                                state = api.load()
+                                needsLogin = false
+                            }
                         }
                     }
                 } else if (!busy) item {
@@ -201,122 +317,74 @@ private fun PlannerScreen(api: PlannerApi, settingsFirst: Boolean, reminder: Str
                 }
                 return@LazyColumn
             }
-            item {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Section.entries.forEach { tab ->
-                        FilterChip(section == tab, { section = tab }, { Text(tab.label) })
-                    }
-                }
-            }
             when (section) {
                 Section.CALENDAR -> {
-                    val timezone = runCatching { ZoneId.of(data.optString("timezone")) }.getOrDefault(ZoneId.systemDefault())
-                    item {
-                        Text(month.atDay(1).format(DateTimeFormatter.ofPattern("MMMM yyyy", locale)), style = MaterialTheme.typography.titleLarge)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            TextButton(onClick = { month = month.minusMonths(1) }) { Text("Previous") }
-                            TextButton(onClick = { month = month.plusMonths(1) }) { Text("Next") }
-                            Button(enabled = !busy, onClick = {
-                                val today = LocalDate.now(timezone)
-                                val day = if (YearMonth.from(today) == month) today else month.atDay(1)
-                                edit = body("start" to day.atTime(17, 0).format(timestamp), "minutes" to 30)
-                            }) { Text("Add workout") }
-                            TextButton(enabled = !busy, onClick = { export.launch("workouts.ics") }) { Text("Export .ics") }
+                    item("calendar") {
+                        PlannerCalendarHeader(day, today, calendarView, locale, calendar, busy,
+                            selectDay = { dateOverride = it.toString() },
+                            selectView = { calendarView = it },
+                            add = { edit = body("start" to day.atTime(17, 0).format(timestamp), "minutes" to 30) },
+                            export = { export.launch("workouts.ics") },
+                        )
+                    }
+                    if (historyError) item { Note("Some recorded workouts could not be loaded.") }
+                    val visible = calendar.filter {
+                        when (calendarView) {
+                            CalendarView.MONTH -> it.day == day
+                            CalendarView.WEEK -> it.day >= weekStart && it.day < weekStart.plusDays(7)
+                            CalendarView.AGENDA -> YearMonth.from(it.day) == month
+                        }
+                    }.groupBy { it.day }.toMutableMap()
+                    if (calendarView != CalendarView.AGENDA) visible.putIfAbsent(day, emptyList())
+                    val heading = DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)
+                    if (visible.isEmpty()) item {
+                        PhCard {
+                            Text("No workouts this month", style = MaterialTheme.typography.titleMedium)
                         }
                     }
-                    val planned = data.objects("workouts").filter { it.optString("start").startsWith(month.toString()) }
-                    if (planned.isEmpty()) item { Text("No planned workouts this month.") }
-                    items(planned, key = { it.optString("id") }) { workout ->
-                        val id = workout.optString("id")
-                        val status = workout.optString("status", "planned")
-                        PhCard {
-                            WorkoutDescription(workout, showStatus = true)
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                TextButton(enabled = !busy, onClick = { edit = workout }) { Text("Edit") }
-                                TextButton(enabled = !busy, onClick = { delete = workout }) { Text("Delete") }
-                                TextButton(onClick = { selected = id; section = Section.TRAINER }) { Text("Ask Trainer") }
-                                if (status !in setOf("skipped", "rescheduled")) {
-                                    TextButton(onClick = {
-                                        val insert = Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI)
-                                            .putExtra(CalendarContract.Events.TITLE, workout.optString("title"))
-                                            .putExtra(CalendarContract.Events.DESCRIPTION, workout.optString("details"))
-                                            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, workout.optLong("start_ms"))
-                                            .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, workout.optLong("end_ms"))
-                                        try {
-                                            context.startActivity(insert)
-                                        } catch (_: ActivityNotFoundException) {
-                                            notice = "No calendar app is available. Use Export .ics."
-                                        }
-                                    }) { Text("Add to phone calendar") }
-                                }
-                            }
+                    visible.toSortedMap().forEach { (date, entries) ->
+                        item("date-$date") {
+                            Text(date.format(heading), Modifier.padding(start = 4.dp, top = 4.dp),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (date == day && calendarView != CalendarView.AGENDA)
+                                    MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                         }
-                    }
-                    if (history.isNotEmpty()) item { Text("Recorded workouts", style = MaterialTheme.typography.titleMedium) }
-                    items(history) { workout ->
-                        PhCard {
-                            WorkoutDescription(workout)
-                            val metrics = workout.optJSONObject("metrics")
-                            val distance = metrics?.optDouble("distance_m")?.takeIf { it.isFinite() }
-                            if (distance != null) Text(String.format(locale, "%.2f km", distance / 1000))
-                            if (!workout.isNull("rpe")) Text("Effort ${workout.optInt("rpe")}/10")
+                        if (entries.isEmpty()) item("empty-$date") {
+                            PhCard { Text("No workouts on this day.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                        items(entries, key = { "${it.recorded}-${it.data.optString("id")}" }) { entry ->
+                            val workout = entry.data
+                            CalendarWorkoutCard(entry, busy, locale,
+                                edit = { edit = workout },
+                                delete = { delete = workout },
+                                ask = { selected = workout.optString("id"); section = Section.TRAINER },
+                                addToPhone = {
+                                    val insert = Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI)
+                                        .putExtra(CalendarContract.Events.TITLE, workout.optString("title"))
+                                        .putExtra(CalendarContract.Events.DESCRIPTION, workout.optString("details"))
+                                        .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, workout.optLong("start_ms"))
+                                        .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, workout.optLong("end_ms"))
+                                    try {
+                                        context.startActivity(insert)
+                                    } catch (_: ActivityNotFoundException) {
+                                        notice = "No calendar app is available. Use Export .ics."
+                                    }
+                                },
+                            )
                         }
                     }
                 }
                 Section.TRAINER -> {
-                    val current = data.objects("workouts").firstOrNull { it.optString("id") == selected }
-                    val ready = data.optBoolean("trainer_ready")
-                    if (current != null) item {
-                        PhCard {
-                            Text("Workout context", style = MaterialTheme.typography.titleMedium)
-                            WorkoutDescription(current)
-                            TextButton(onClick = { selected = null }) { Text("Clear workout context") }
-                        }
-                    }
-                    items(data.objects("messages")) { turn ->
-                        PhCard {
-                            Text(if (turn.optString("role") == "user") "You" else "Trainer",
-                                style = MaterialTheme.typography.titleMedium)
-                            Text(turn.optString("text"))
-                        }
-                    }
-                    items(data.objects("options"), key = { it.optString("id") }) { option ->
-                        PhCard {
-                            Text(option.optString("title"), style = MaterialTheme.typography.titleMedium)
-                            Text(option.optString("summary"))
-                            val removals = option.optJSONArray("remove_ids")
-                            for (index in 0 until (removals?.length() ?: 0)) {
-                                val removed = data.objects("workouts").firstOrNull { it.optString("id") == removals?.optString(index) }
-                                if (removed != null) Text("Replace ${removed.optString("title")} · ${removed.optString("start").replace('T', ' ')}")
-                            }
-                            option.objects("workouts").forEach {
-                                HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                                WorkoutDescription(it)
-                            }
-                            Button(enabled = !busy, onClick = {
-                                send("accept", "id" to option.optString("id"), done = {
-                                    option.objects("workouts").firstOrNull()?.optString("start")?.take(7)
-                                        ?.let { month = YearMonth.parse(it) }
-                                    section = Section.CALENDAR
-                                })
-                            }) { Text("Accept plan") }
-                        }
-                    }
-                    item {
-                        if (!ready) Text("Trainer is currently unavailable.")
-                        OutlinedTextField(message, { message = it.take(3000) }, label = { Text("Message Trainer") },
-                            modifier = Modifier.fillMaxWidth(), minLines = 2)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(enabled = ready && !busy && message.isNotBlank(), onClick = {
-                                send("chat", "message" to message, "workout_id" to selected, done = { message = "" })
-                            }) { Text("Send") }
-                            TextButton(enabled = ready && !busy, onClick = {
-                                send("chat", "message" to "Suggest plans based on my saved setup and recent health.")
-                            }) { Text("Suggest plans") }
-                            if (current != null) TextButton(enabled = ready && !busy, onClick = {
-                                send("chat", "message" to message.ifBlank { "Move this workout to another suitable day." },
-                                    "workout_id" to selected, "reschedule" to true, done = { message = "" })
-                            }) { Text("Propose a reschedule") }
+                    if (turns.isEmpty()) item { TrainerWelcome() }
+                    items(turns) { TrainerTurn(it) }
+                    items(proposals, key = { it.optString("id") }) { option ->
+                        TrainerProposal(option, planned, busy) {
+                            send("accept", "id" to option.optString("id"), done = {
+                                option.objects("workouts").firstOrNull()?.optString("start")?.take(10)
+                                    ?.let { dateOverride = it }
+                                plannerList.requestScrollToItem(0)
+                                section = Section.CALENDAR
+                            })
                         }
                     }
                 }
@@ -336,7 +404,7 @@ private fun PlannerScreen(api: PlannerApi, settingsFirst: Boolean, reminder: Str
         EditWorkout(workout, busy, { edit = null }) { values ->
             send("save", *values.toTypedArray(), done = {
                 val start = values.firstOrNull { it.first == "start" }?.second as? String
-                if (start != null) month = YearMonth.parse(start.take(7))
+                if (start != null) dateOverride = start.take(10)
                 edit = null
             })
         }
@@ -367,20 +435,31 @@ private fun PlannerLogin(busy: Boolean, login: (String, String) -> Unit) {
     }
 }
 
+internal fun workoutStatus(workout: JSONObject): String {
+    val status = workout.optString("status", "planned")
+    return if (status == "planned" && workout.optLong("end_ms", Long.MAX_VALUE) <= System.currentTimeMillis())
+        "Unconfirmed" else status.replaceFirstChar(Char::uppercase)
+}
+
 @Composable
-private fun WorkoutDescription(workout: JSONObject, showStatus: Boolean = false) {
+internal fun WorkoutDescription(workout: JSONObject, timeOnly: Boolean = false) {
     val title = workout.optString("title").ifBlank { workout.optString("kind", "Workout").replace('_', ' ') }
     val minutes = workout.optInt("minutes", (workout.optLong("seconds") / 60).toInt())
     Text(title, style = MaterialTheme.typography.titleMedium)
-    val status = if (showStatus) {
-        val recorded = workout.optString("status", "planned")
-        if (recorded == "planned" && workout.optLong("end_ms", Long.MAX_VALUE) <= System.currentTimeMillis()) " · Unconfirmed"
-        else " · " + recorded.replaceFirstChar(Char::uppercase)
-    } else ""
-    Text("${workout.optString("start").replace('T', ' ')} · $minutes min$status")
+    val start = workout.optString("start")
+    val locale = LocalConfiguration.current.locales[0]
+    val time = runCatching {
+        val dateTime = LocalDateTime.parse(start)
+        val formatter = if (timeOnly) DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+            else DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+        dateTime.format(formatter.withLocale(locale))
+    }.getOrDefault(start.replace('T', ' '))
+    Text("$time · $minutes min", style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
     workout.optString("details").takeIf(String::isNotBlank)?.let { Text(it) }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditWorkout(
     item: JSONObject,
@@ -388,7 +467,9 @@ private fun EditWorkout(
     cancel: () -> Unit,
     save: (List<Pair<String, Any?>>) -> Unit,
 ) {
-    val context = LocalContext.current
+    val locale = LocalConfiguration.current.locales[0]
+    var choosingDate by remember(item) { mutableStateOf(false) }
+    var choosingTime by remember(item) { mutableStateOf(false) }
     var title by remember(item) { mutableStateOf(item.optString("title")) }
     var start by remember(item) { mutableStateOf(LocalDateTime.parse(item.optString("start"))) }
     var duration by remember(item) { mutableStateOf(item.optInt("minutes", 30).toString()) }
@@ -398,14 +479,14 @@ private fun EditWorkout(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(title, { title = it.take(120) }, label = { Text("Workout name") }, singleLine = true)
-                TextButton(onClick = {
-                    DatePickerDialog(context, { _, y, m, d -> start = LocalDate.of(y, m + 1, d).atTime(start.toLocalTime()) },
-                        start.year, start.monthValue - 1, start.dayOfMonth).show()
-                }) { Text(start.toLocalDate().toString()) }
-                TextButton(onClick = {
-                    TimePickerDialog(context, { _, h, m -> start = start.toLocalDate().atTime(h, m) },
-                        start.hour, start.minute, true).show()
-                }) { Text(start.toLocalTime().toString()) }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { choosingDate = true }) {
+                        Text(start.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale)))
+                    }
+                    TextButton(onClick = { choosingTime = true }) {
+                        Text(start.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale)))
+                    }
+                }
                 OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(3) }, label = { Text("Minutes") }, singleLine = true)
                 OutlinedTextField(details, { details = it.take(4000) }, label = { Text("Session details") }, minLines = 2)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -423,6 +504,48 @@ private fun EditWorkout(
                 }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = cancel) { Text("Cancel") } })
+    if (choosingDate) {
+        val picker = rememberDatePickerState(initialSelectedDateMillis =
+            start.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
+        DatePickerDialog(
+            onDismissRequest = { choosingDate = false },
+            confirmButton = {
+                TextButton(enabled = picker.selectedDateMillis != null, onClick = {
+                    picker.selectedDateMillis?.let {
+                        val date = Instant.ofEpochMilli(it).atOffset(ZoneOffset.UTC).toLocalDate()
+                        start = date.atTime(start.toLocalTime())
+                    }
+                    choosingDate = false
+                }) { Text("Set date") }
+            },
+            dismissButton = { TextButton(onClick = { choosingDate = false }) { Text("Cancel") } },
+        ) { DatePicker(picker) }
+    }
+    if (choosingTime) {
+        val is24Hour = android.text.format.DateFormat.is24HourFormat(LocalContext.current)
+        val config = LocalConfiguration.current
+        val horizontal = config.screenHeightDp < 480 && config.screenWidthDp >= 560
+        val layout = if (horizontal) TimePickerLayoutType.Horizontal else TimePickerLayoutType.Vertical
+        val picker = rememberTimePickerState(initialHour = start.hour, initialMinute = start.minute, is24Hour = is24Hour)
+        AlertDialog(
+            onDismissRequest = { choosingTime = false },
+            title = { Text("Workout time") },
+            modifier = Modifier.padding(horizontal = 8.dp).widthIn(max = 560.dp).fillMaxWidth(),
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    TimePicker(picker, layoutType = layout)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    start = start.toLocalDate().atTime(picker.hour, picker.minute)
+                    choosingTime = false
+                }) { Text("Set time") }
+            },
+            dismissButton = { TextButton(onClick = { choosingTime = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -443,74 +566,84 @@ private fun PlannerSettings(data: JSONObject, busy: Boolean, submit: (String, Li
     var enabled by remember(reminders.optBoolean("enabled")) { mutableStateOf(reminders.optBoolean("enabled")) }
     var topic by remember(reminders.optString("topic")) { mutableStateOf(reminders.optString("topic")) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Goals and schedule", style = MaterialTheme.typography.titleMedium)
-        PlannerField(priorities, { priorities = it }, "Priorities")
-        PlannerField(activities, { activities = it }, "Activities and equipment")
-        PlannerField(goals, { goals = it }, "Goals")
-        PlannerField(availability, { availability = it }, "Availability")
-        PlannerField(timezone, { timezone = it }, "Timezone")
-        PlannerField(morning, { morning = it }, "Morning reminder (HH:MM)")
-        Row { Checkbox(followUp, { followUp = it }); Text("Follow up one hour after workouts", Modifier.padding(top = 12.dp)) }
-        Button(enabled = !busy, onClick = {
-            submit("setup", listOf("priorities" to priorities, "activities" to activities, "goals" to goals,
-                "availability" to availability, "timezone" to timezone, "morning" to morning, "follow_up" to followUp))
-        }) { Text("Save setup") }
-        HorizontalDivider()
-        Text("ntfy reminders", style = MaterialTheme.typography.titleMedium)
-        if (!reminders.optBoolean("available")) Text("ntfy is currently unavailable on the hub.")
-        else {
-            Text("In ntfy, subscribe to this topic on ${reminders.optString("server")}. Keep the topic private.")
-            if (topic.isNotEmpty()) Text(topic)
-            PlannerField(topic, { topic = it }, "Topic (blank generates a private topic)")
-            Row { Checkbox(enabled, { enabled = it }); Text("Send workout reminders through ntfy", Modifier.padding(top = 12.dp)) }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PhCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Goals and schedule", style = MaterialTheme.typography.titleMedium)
+                PlannerField(priorities, { priorities = it }, "Priorities")
+                PlannerField(activities, { activities = it }, "Activities and equipment")
+                PlannerField(goals, { goals = it }, "Goals")
+                PlannerField(availability, { availability = it }, "Availability")
+                PlannerField(timezone, { timezone = it }, "Timezone")
+                PlannerField(morning, { morning = it }, "Morning reminder (HH:MM)")
+                Row { Checkbox(followUp, { followUp = it }); Text("Follow up one hour after workouts", Modifier.padding(top = 12.dp)) }
                 Button(enabled = !busy, onClick = {
-                    submit("ntfy_settings", listOf("enabled" to enabled, "topic" to topic))
-                }) { Text("Save ntfy settings") }
-                val savedTopic = reminders.optString("topic")
-                if (savedTopic.isNotBlank()) {
-                    TextButton(onClick = {
-                        val host = Uri.parse(reminders.optString("server")).encodedAuthority
-                        if (host != null) {
-                            val uri = Uri.Builder().scheme("ntfy").encodedAuthority(host).appendPath(savedTopic).build()
-                            try {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                            } catch (_: ActivityNotFoundException) {
-                                android.widget.Toast.makeText(context, "Open the ntfy app and add this topic.", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }) { Text("Open topic in ntfy") }
-                }
-                TextButton(enabled = !busy && reminders.optBoolean("enabled"), onClick = {
-                    submit("ntfy_test", emptyList())
-                }) { Text("Send test notification") }
+                    submit("setup", listOf("priorities" to priorities, "activities" to activities, "goals" to goals,
+                        "availability" to availability, "timezone" to timezone, "morning" to morning, "follow_up" to followUp))
+                }) { Text("Save setup") }
             }
         }
-        HorizontalDivider()
-        Text("Trainer model and memory", style = MaterialTheme.typography.titleMedium)
-        val endpoints = data.optJSONArray("allowed_model_endpoints")
-        for (i in 0 until (endpoints?.length() ?: 0)) {
-            val choice = endpoints?.optString(i).orEmpty()
-            FilterChip(endpoint == choice, { endpoint = choice }, { Text(choice) })
+        PhCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("ntfy reminders", style = MaterialTheme.typography.titleMedium)
+                if (!reminders.optBoolean("available")) Text("ntfy is currently unavailable on the hub.")
+                else {
+                    Text("In ntfy, subscribe to this topic on ${reminders.optString("server")}. Keep the topic private.")
+                    if (topic.isNotEmpty()) Text(topic)
+                    PlannerField(topic, { topic = it }, "Topic (blank generates a private topic)")
+                    Row { Checkbox(enabled, { enabled = it }); Text("Send workout reminders through ntfy", Modifier.padding(top = 12.dp)) }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = !busy, onClick = {
+                            submit("ntfy_settings", listOf("enabled" to enabled, "topic" to topic))
+                        }) { Text("Save ntfy settings") }
+                        val savedTopic = reminders.optString("topic")
+                        if (savedTopic.isNotBlank()) {
+                            TextButton(onClick = {
+                                val host = Uri.parse(reminders.optString("server")).encodedAuthority
+                                if (host != null) {
+                                    val uri = Uri.Builder().scheme("ntfy").encodedAuthority(host).appendPath(savedTopic).build()
+                                    try {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                    } catch (_: ActivityNotFoundException) {
+                                        android.widget.Toast.makeText(context, "Open the ntfy app and add this topic.", android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }) { Text("Open topic in ntfy") }
+                        }
+                        TextButton(enabled = !busy && reminders.optBoolean("enabled"), onClick = {
+                            submit("ntfy_test", emptyList())
+                        }) { Text("Send test notification") }
+                    }
+                }
+            }
         }
-        PlannerField(model, { model = it }, "Model")
-        Row {
-            Checkbox(webSearch, { webSearch = it }, enabled = data.optBoolean("search_available"))
-            Text("Allow public web search", Modifier.padding(top = 12.dp))
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = !busy, onClick = {
-                submit("model_settings", listOf("base_url" to endpoint, "model" to model, "web_search" to webSearch))
-            }) { Text("Save model settings") }
-            TextButton(enabled = !busy, onClick = {
-                submit("test_model", listOf("base_url" to endpoint, "model" to model))
-            }) { Text("Test connection") }
-        }
-        val notes = data.optJSONArray("notes")
-        for (i in 0 until (notes?.length() ?: 0)) {
-            val note = notes?.optString(i).orEmpty()
-            Text(note)
-            TextButton(enabled = !busy, onClick = { submit("forget_note", listOf("note" to note)) }) { Text("Remove saved note") }
+        PhCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Trainer model and memory", style = MaterialTheme.typography.titleMedium)
+                val endpoints = data.optJSONArray("allowed_model_endpoints")
+                for (i in 0 until (endpoints?.length() ?: 0)) {
+                    val choice = endpoints?.optString(i).orEmpty()
+                    FilterChip(endpoint == choice, { endpoint = choice }, { Text(choice) })
+                }
+                PlannerField(model, { model = it }, "Model")
+                Row {
+                    Checkbox(webSearch, { webSearch = it }, enabled = data.optBoolean("search_available"))
+                    Text("Allow public web search", Modifier.padding(top = 12.dp))
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !busy, onClick = {
+                        submit("model_settings", listOf("base_url" to endpoint, "model" to model, "web_search" to webSearch))
+                    }) { Text("Save model settings") }
+                    TextButton(enabled = !busy, onClick = {
+                        submit("test_model", listOf("base_url" to endpoint, "model" to model))
+                    }) { Text("Test connection") }
+                }
+                val notes = data.optJSONArray("notes")
+                for (i in 0 until (notes?.length() ?: 0)) {
+                    val note = notes?.optString(i).orEmpty()
+                    Text(note)
+                    TextButton(enabled = !busy, onClick = { submit("forget_note", listOf("note" to note)) }) { Text("Remove saved note") }
+                }
+            }
         }
     }
 }
