@@ -97,7 +97,7 @@ internal fun WorkoutDetail.pebbleFitPayload(): JsonObject = buildJsonObject {
     put("active_seconds", active)
     put("type", workout.sport.name)
     workout.rpe?.let { put("rpe", it) }
-    if (route.isNotEmpty()) put("distance_m", distance)
+    if (route.isNotEmpty() || workout.manualDistance != null) put("distance_m", distance)
     put("heart", buildJsonArray {
         heartBuckets(heart, active).forEach { bucket ->
             add(buildJsonArray { add(bucket.offset); add(bucket.bpm); add(bucket.seconds) })

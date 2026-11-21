@@ -58,11 +58,11 @@ fun WorkoutEntry() {
     val open = { context.startActivity(Intent(context, WorkoutActivity::class.java)) }
     Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp), Alignment.CenterVertically) {
         FilledTonalButton(onClick = open, modifier = Modifier.weight(1f)) {
-            Text(if (recording == null) "Log workout" else "View recording")
+            Text(if (recording == null) "Record workout" else "View recording")
         }
         TextButton(onClick = {
-            context.startActivity(Intent(context, WorkoutActivity::class.java).putExtra("history", true))
-        }) { Text("Workout history") }
+            context.startActivity(Intent(context, WorkoutActivity::class.java).putExtra("manual_entry", true))
+        }) { Text("Add past activity") }
     }
 }
 
@@ -77,7 +77,7 @@ internal class WorkoutActivity : ComponentActivity() {
             val prefs by repo.settings.prefs.collectAsState(initial = Prefs(8000, 8, "system"))
             PhTheme(prefs.theme) {
                 WorkoutScreen(repo, intent.getBooleanExtra("history", false),
-                    intent.getStringExtra("workout_id"), screenVisible, ::finish)
+                    intent.getStringExtra("workout_id"), intent.getBooleanExtra("manual_entry", false), screenVisible, ::finish)
             }
         }
     }
@@ -87,12 +87,15 @@ internal class WorkoutActivity : ComponentActivity() {
 }
 
 @Composable
-private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: String?, visible: Boolean, close: () -> Unit) {
+private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: String?, manualEntry: Boolean, visible: Boolean, close: () -> Unit) {
     val context = LocalContext.current
     val live by WorkoutRecorder.live.collectAsState()
     val finished by WorkoutRecorder.finished.collectAsState()
     val error by WorkoutRecorder.error.collectAsState()
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var adding by rememberSaveable { mutableStateOf(manualEntry) }
+    var saving by remember { mutableStateOf(false) }
     var history by rememberSaveable { mutableStateOf(openHistory) }
     var detailId by rememberSaveable { mutableStateOf(initialId) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -127,7 +130,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
             else -> close()
         }
     }
-    BackHandler { back() }
+    BackHandler(enabled = !adding) { back() }
 
     Scaffold(
         topBar = {
@@ -137,7 +140,10 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
                     IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
-                    if (!history && live == null) TextButton(onClick = { history = true }) { Text("History") }
+                    if (detailId == null && live == null) {
+                        TextButton(onClick = { adding = true }) { Text("Add past") }
+                        if (!history) TextButton(onClick = { history = true }) { Text("History") }
+                    }
                 },
             )
         },
@@ -155,6 +161,24 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
                 }
                 history -> History(store, refresh) { detailId = it }
                 else -> Setup(visible)
+            }
+            if (adding && store != null) {
+                WorkoutLogEditor(null, saving, close = {
+                    adding = false
+                    if (manualEntry && detailId == null) close()
+                }) { workout ->
+                    saving = true
+                    scope.launch {
+                        val saved = withContext(Dispatchers.IO) { runCatching { store.saveLog(workout, new = true) } }
+                        saving = false
+                        if (saved.isSuccess) {
+                            adding = false
+                            history = true
+                            detailId = workout.id
+                            refresh++
+                        } else snackbar.showSnackbar("Could not save activity.")
+                    }
+                }
             }
         }
     }
@@ -410,7 +434,7 @@ private fun SetDialog(onDismiss: () -> Unit, save: (StrengthSet) -> Unit) {
 
 @Composable
 private fun History(store: WorkoutStore, refresh: Int, open: (String) -> Unit) {
-    val workouts by produceState<Result<List<Workout>>?>(null, refresh) {
+    val workouts by produceState<Result<List<WorkoutStore.HistoryEntry>>?>(null, refresh) {
         value = withContext(Dispatchers.IO) { runCatching { store.history() } }
     }
     val entries = workouts?.getOrNull()
@@ -419,11 +443,12 @@ private fun History(store: WorkoutStore, refresh: Int, open: (String) -> Unit) {
             workouts?.isFailure == true -> item { Text("Could not load workout history.") }
             entries == null -> item { CircularProgressIndicator() }
             entries.isEmpty() -> item { Text("Your saved workouts will appear here.") }
-            else -> items(entries, key = { it.id }) { entry ->
+            else -> items(entries, key = { it.workout.id }) { row ->
+                val entry = row.workout
                 Row(Modifier.fillMaxWidth().clickable { open(entry.id) }.padding(vertical = 14.dp),
                     Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(entry.sport.label, style = MaterialTheme.typography.titleMedium)
+                        Text(entry.title ?: entry.sport.label, style = MaterialTheme.typography.titleMedium)
                         Text(workoutDate(entry.start) + if (entry.interrupted) " · Interrupted" else "",
                             style = MaterialTheme.typography.bodySmall)
                     }
@@ -446,6 +471,9 @@ private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: 
     var busy by remember { mutableStateOf(false) }
     var delete by remember { mutableStateOf(false) }
     var effort by remember { mutableStateOf(false) }
+    var editing by rememberSaveable(id) { mutableStateOf(false) }
+    var savingEdit by remember { mutableStateOf(false) }
+    var section by rememberSaveable(id) { mutableStateOf("Overview") }
     val result by produceState<Result<WorkoutDetail?>?>(null, id, version) {
         value = withContext(Dispatchers.IO) { runCatching { store.detail(id) } }
     }
@@ -476,128 +504,168 @@ private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: 
         return
     }
     val workout = detail.workout
+    val uploaded = workout.uploaded || dashboard?.workouts?.any { it.id == "phone:${workout.id}" } == true
     val calories = dashboard?.let { data ->
         val workoutDay = Instant.ofEpochMilli(workout.start).atZone(Fmt.zone(data.tz)).toLocalDate().toString()
         val weight = data.weight.filter { it.date <= workoutDay }.maxByOrNull { it.date }
         workout.estimatedCalories(weight?.kg)
     }
     val series = remember(detail) { workoutSeries(detail) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item {
-            Text(workoutDate(workout.start), color = MaterialTheme.colorScheme.primary)
-            Text(workout.sport.label, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
-            if (workout.interrupted) Text("Interrupted recording", color = MaterialTheme.colorScheme.secondary)
+    val tabs = buildList {
+        add("Overview")
+        if (series.heart.isNotEmpty() || series.pace.isNotEmpty() || series.altitude.isNotEmpty()) add("Charts")
+        if (series.splits.isNotEmpty() || detail.laps.isNotEmpty()) add("Splits")
+        if (detail.sets.isNotEmpty()) add("Sets")
+    }
+    val selected = section.takeIf { it in tabs } ?: "Overview"
+    Column(Modifier.fillMaxSize()) {
+        if (tabs.size > 1) PrimaryTabRow(selectedTabIndex = tabs.indexOf(selected)) {
+            tabs.forEach { tab -> Tab(selected == tab, onClick = { section = tab }, text = { Text(tab) }) }
         }
-        if (detail.route.isNotEmpty()) item { RouteTrace(detail.route) }
-        item {
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                Readout("Active time", duration(workout.active))
-                Readout("Elapsed", duration(workout.end - workout.start))
-            }
-            if (calories != null) {
-                Column(Modifier.padding(top = 12.dp)) {
-                    Readout("Est. calories", "$calories kcal")
-                    Note("Based on active time and your logged weight.")
+        key(selected) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                if (selected == "Overview") item {
+                    Text("${workoutDate(workout.start)} · ${if (workout.manual) "${workout.sport.label} · Manual entry" else workout.sport.label}",
+                        color = MaterialTheme.colorScheme.primary)
+                    Text(workout.title ?: workout.sport.label, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+                    TextButton(enabled = !busy, onClick = { editing = true }) { Text("Edit activity") }
+                    if (workout.interrupted) Text("Interrupted recording", color = MaterialTheme.colorScheme.secondary)
                 }
-            }
-            if (detail.route.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth().padding(top = 12.dp), Arrangement.SpaceBetween) {
-                    Readout("Distance", distance(detail.distance))
-                    if (detail.distance > 0 && workout.active > 0) {
-                        if (workout.sport == Sport.cycle) {
-                            Readout("Avg speed", speed(workout.active / detail.distance))
-                        } else Readout("Avg pace", pace(workout.active, detail.distance))
+                if (selected == "Overview" && detail.route.isNotEmpty()) item { RouteTrace(detail.route) }
+                if (selected == "Overview") item {
+                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                        Readout("Active time", duration(workout.active))
+                        if (!workout.manual) Readout("Elapsed", duration(workout.end - workout.start))
                     }
-                    series.elevationGain?.let { Readout("Ascent", "${it.toInt()} m") }
-                }
-            }
-        }
-        if (series.heart.isNotEmpty()) item {
-            WorkoutChart("Heart rate", series.heart, workout.active, LocalMetrics.current.heart, gapMs = 5000) { "${it.toInt()} bpm" }
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                Readout("Average", "${series.averageBpm} bpm")
-                Readout("Peak", "${series.heart.maxOf { it.value }.toInt()} bpm")
-            }
-        }
-        if (series.heart.isNotEmpty()) item { HeartZones(detail.heart) }
-        if (series.pace.isNotEmpty()) item {
-            if (workout.sport == Sport.cycle) {
-                val speeds = remember(series.pace) { series.pace.map { it.copy(value = 3_600_000 / it.value) } }
-                WorkoutChart("Speed", speeds, workout.active, MaterialTheme.colorScheme.primary) {
-                    speed(3600 / it)
-                }
-            } else {
-                WorkoutChart("Pace", series.pace, workout.active, MaterialTheme.colorScheme.primary, reverse = true) {
-                    duration(it.toLong()) + " /km"
-                }
-            }
-        }
-        if (series.altitude.isNotEmpty()) item {
-            WorkoutChart("Elevation", series.altitude, workout.active, MaterialTheme.colorScheme.tertiary) { "${it.toInt()} m" }
-        }
-        if (detail.distance >= 1000) item {
-            Text("Kilometre splits", style = MaterialTheme.typography.titleLarge)
-            series.splits.forEachIndexed { index, split ->
-                BreakdownRow("${index + 1} km", duration(split))
-            }
-        }
-        if (detail.laps.isNotEmpty()) item {
-            Text("Laps", style = MaterialTheme.typography.titleLarge)
-            (detail.laps + Lap(workout.active, detail.distance)).mapIndexedNotNull { index, lap ->
-                val previous = detail.laps.getOrNull(index - 1) ?: Lap(0, 0.0)
-                val time = lap.active - previous.active
-                if (time <= 0) null else index + 1 to (duration(time) + "  ·  " + distance(lap.meters - previous.meters))
-            }.forEach { (number, summary) -> BreakdownRow("Lap $number", summary) }
-        }
-        if (detail.sets.isNotEmpty()) item {
-            Text("Strength sets", style = MaterialTheme.typography.titleLarge)
-            detail.sets.forEachIndexed { index, set ->
-                BreakdownRow("${index + 1}. ${set.exercise}", "${set.reps} reps" + (set.kg?.let { "  ·  $it kg" } ?: ""))
-            }
-        }
-        item {
-            HorizontalDivider()
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                Text("Perceived effort")
-                TextButton(enabled = !busy, onClick = { effort = true }) {
-                    Text(workout.rpe?.let { "$it / 10" } ?: "Add effort")
-                }
-            }
-            Button(modifier = Modifier.fillMaxWidth(), enabled = !busy && workout.active >= 1000, onClick = {
-                if (uploadConfig == null) {
-                    uploadSettings = true
-                } else {
-                    busy = true
-                    scope.launch {
-                        val message = try {
-                            val config = repo.settings.currentWorkoutUpload() ?: throw IllegalStateException()
-                            val payload = withContext(Dispatchers.Default) { detail.pebbleFitPayload() }
-                            Api().uploadWorkout(config, payload)
-                            repo.refresh()
-                            "Workout sent to PebbleFit."
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: org.tdgs.ph.data.ApiException) {
-                            e.message ?: "Could not send workout."
-                        } catch (_: Exception) {
-                            "Could not send workout. Check your hub connection and upload token."
-                        } finally {
-                            busy = false
+                    if (calories != null) {
+                        Column(Modifier.padding(top = 12.dp)) {
+                            Readout("Est. calories", "$calories kcal")
+                            Note("Based on active time and your logged weight.")
                         }
-                        snackbar.showSnackbar(message)
+                    }
+                    if (detail.route.isNotEmpty() || workout.manualDistance != null) {
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp), Arrangement.SpaceBetween) {
+                            Readout("Distance", distance(detail.distance))
+                            if (detail.distance > 0 && workout.active > 0) {
+                                if (workout.sport == Sport.cycle) {
+                                    Readout("Avg speed", speed(workout.active / detail.distance))
+                                } else Readout("Avg pace", pace(workout.active, detail.distance))
+                            }
+                            series.elevationGain?.let { Readout("Ascent", "${it.toInt()} m") }
+                        }
                     }
                 }
-            }) { Text(if (busy) "Sending…" else "Send to PebbleFit") }
-            Text("Shares workout totals and heart-rate summaries with your configured hub.")
-            if (uploadConfig != null) TextButton(enabled = !busy, onClick = { uploadSettings = true }) {
-                Text("Workout upload settings")
+                if (selected == "Overview" && series.heart.isNotEmpty()) item {
+                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                        Readout("Avg heart rate", "${series.averageBpm} bpm")
+                        Readout("Peak heart rate", "${series.heart.maxOf { it.value }.toInt()} bpm")
+                    }
+                }
+                if (selected == "Charts" && series.heart.isNotEmpty()) item {
+                    WorkoutChart("Heart rate", series.heart, workout.active, LocalMetrics.current.heart, gapMs = 5000) { "${it.toInt()} bpm" }
+                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                        Readout("Average", "${series.averageBpm} bpm")
+                        Readout("Peak", "${series.heart.maxOf { it.value }.toInt()} bpm")
+                    }
+                }
+                if (selected == "Charts" && series.heart.isNotEmpty()) item { HeartZones(detail.heart) }
+                if (selected == "Charts" && series.pace.isNotEmpty()) item {
+                    if (workout.sport == Sport.cycle) {
+                        val speeds = remember(series.pace) { series.pace.map { it.copy(value = 3_600_000 / it.value) } }
+                        WorkoutChart("Speed", speeds, workout.active, MaterialTheme.colorScheme.primary) {
+                            speed(3600 / it)
+                        }
+                    } else {
+                        WorkoutChart("Pace", series.pace, workout.active, MaterialTheme.colorScheme.primary, reverse = true) {
+                            duration(it.toLong()) + " /km"
+                        }
+                    }
+                }
+                if (selected == "Charts" && series.altitude.isNotEmpty()) item {
+                    WorkoutChart("Elevation", series.altitude, workout.active, MaterialTheme.colorScheme.tertiary) { "${it.toInt()} m" }
+                }
+                if (selected == "Splits" && series.splits.isNotEmpty()) item {
+                    Text("Kilometre splits", style = MaterialTheme.typography.titleLarge)
+                    series.splits.forEachIndexed { index, split ->
+                        BreakdownRow("${index + 1} km", duration(split))
+                    }
+                }
+                if (selected == "Splits" && detail.laps.isNotEmpty()) item {
+                    Text("Laps", style = MaterialTheme.typography.titleLarge)
+                    (detail.laps + Lap(workout.active, detail.distance)).mapIndexedNotNull { index, lap ->
+                        val previous = detail.laps.getOrNull(index - 1) ?: Lap(0, 0.0)
+                        val time = lap.active - previous.active
+                        if (time <= 0) null else index + 1 to (duration(time) + "  ·  " + distance(lap.meters - previous.meters))
+                    }.forEach { (number, summary) -> BreakdownRow("Lap $number", summary) }
+                }
+                if (selected == "Sets") item {
+                    Text("Strength sets", style = MaterialTheme.typography.titleLarge)
+                    detail.sets.forEachIndexed { index, set ->
+                        BreakdownRow("${index + 1}. ${set.exercise}", "${set.reps} reps" + (set.kg?.let { "  ·  $it kg" } ?: ""))
+                    }
+                }
+                if (selected == "Overview" && workout.notes != null) item {
+                    Text("Notes", style = MaterialTheme.typography.titleMedium)
+                    Text(workout.notes)
+                }
+                if (selected == "Overview") item {
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth().padding(top = 12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Text("Perceived effort")
+                        TextButton(enabled = !busy, onClick = { effort = true }) {
+                            Text(workout.rpe?.let { "$it / 10" } ?: "Add effort")
+                        }
+                    }
+                    Button(modifier = Modifier.fillMaxWidth(), enabled = !busy && workout.active >= 1000, onClick = {
+                        if (uploadConfig == null) {
+                            uploadSettings = true
+                        } else {
+                            busy = true
+                            scope.launch {
+                                val message = try {
+                                    val config = repo.settings.currentWorkoutUpload() ?: throw IllegalStateException()
+                                    val payload = withContext(Dispatchers.Default) { detail.pebbleFitPayload() }
+                                    Api().uploadWorkout(config, payload)
+                                    withContext(Dispatchers.IO) { store.markUploaded(id) }
+                                    version++
+                                    repo.refresh()
+                                    "Workout sent to PebbleFit."
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: org.tdgs.ph.data.ApiException) {
+                                    e.message ?: "Could not send workout."
+                                } catch (_: Exception) {
+                                    "Could not send workout. Check your hub connection and upload token."
+                                } finally {
+                                    busy = false
+                                }
+                                snackbar.showSnackbar(message)
+                            }
+                        }
+                    }) { Text(if (busy) "Sending…" else "Send to PebbleFit") }
+                    Text("Shares workout totals and heart-rate summaries with PebbleFit. Names and notes stay on this phone.")
+                    if (uploadConfig != null) TextButton(enabled = !busy, onClick = { uploadSettings = true }) {
+                        Text("Workout upload settings")
+                    }
+                    if (detail.route.isNotEmpty()) {
+                        OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                            export.launch("${workout.sport.name}-${Instant.ofEpochMilli(workout.start).atZone(ZoneId.systemDefault()).toLocalDate()}.gpx")
+                        }) { Text("Save GPX") }
+                    }
+                    TextButton(enabled = !busy, onClick = { delete = true }) { Text("Delete from phone") }
+                }
             }
-            if (detail.route.isNotEmpty()) {
-                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                    export.launch("${workout.sport.name}-${Instant.ofEpochMilli(workout.start).atZone(ZoneId.systemDefault()).toLocalDate()}.gpx")
-                }) { Text("Save GPX") }
-            }
-            TextButton(enabled = !busy, onClick = { delete = true }) { Text("Delete from phone") }
+        }
+    }
+    if (editing) WorkoutLogEditor(workout, savingEdit, lockMetrics = uploaded, close = { editing = false }) { updated ->
+        savingEdit = true
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) { runCatching { store.saveLog(updated, new = false, lockMetrics = uploaded) } }
+            savingEdit = false
+            if (saved.isSuccess) {
+                version++
+                editing = false
+            } else snackbar.showSnackbar("Could not update activity.")
         }
     }
     if (uploadSettings) WorkoutUploadDialog(repo) { uploadSettings = false }

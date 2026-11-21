@@ -25,6 +25,11 @@ internal data class Workout(
     val active: Long,
     val interrupted: Boolean = false,
     val rpe: Int? = null,
+    val title: String? = null,
+    val notes: String? = null,
+    val manual: Boolean = false,
+    val manualDistance: Double? = null,
+    val uploaded: Boolean = false,
 )
 
 /** Estimated total energy using the standard MET conversion (1 MET = 3.5 mL O₂/kg/min). */
@@ -50,7 +55,7 @@ internal data class WorkoutDetail(
     val laps: List<Lap>,
     val sets: List<StrengthSet>,
 ) {
-    val distance get() = route.lastOrNull()?.meters ?: 0.0
+    val distance get() = workout.manualDistance ?: route.lastOrNull()?.meters ?: 0.0
 }
 
 internal fun decodeHeartRate(bytes: ByteArray): Int? {

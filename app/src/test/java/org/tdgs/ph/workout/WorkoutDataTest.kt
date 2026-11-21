@@ -1,5 +1,7 @@
 package org.tdgs.ph.workout
 
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import org.xml.sax.InputSource
 import java.io.StringReader
 import java.io.StringWriter
@@ -14,6 +16,23 @@ class WorkoutDataTest {
         assertEquals(202, workout.estimatedCalories(70.0))
         assertNull(workout.estimatedCalories(null))
         assertNull(workout.copy(sport = Sport.tennis).estimatedCalories(70.0))
+    }
+
+    @Test
+    fun manualWorkoutUploadsDistanceWithoutInventingSensorData() {
+        val workout = Workout("manual", Sport.cycle, 1_000_000, 2_800_000, 1_800_000,
+            title = "Commute", notes = "Private notes", manual = true, manualDistance = 8_500.0)
+        val detail = WorkoutDetail(workout, emptyList(), emptyList(), emptyList(), emptyList())
+        val payload = detail.pebbleFitPayload()
+
+        assertEquals("8500.0", payload.getValue("distance_m").jsonPrimitive.content)
+        assertEquals("1800", payload.getValue("active_seconds").jsonPrimitive.content)
+        assertTrue(payload.getValue("heart").jsonArray.isEmpty())
+        assertFalse(payload.containsKey("title"))
+        assertFalse(payload.containsKey("notes"))
+        assertTrue(workoutSeries(detail).splits.isEmpty())
+        assertFalse(detail.copy(workout = workout.copy(manualDistance = null)).pebbleFitPayload()
+            .containsKey("distance_m"))
     }
 
     @Test
