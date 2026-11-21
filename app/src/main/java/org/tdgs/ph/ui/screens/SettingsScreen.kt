@@ -1,5 +1,7 @@
 package org.tdgs.ph.ui.screens
 
+import android.content.Intent
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.tdgs.ph.data.Api
 import org.tdgs.ph.data.HubConfig
+import org.tdgs.ph.planner.WorkoutPlannerActivity
 import org.tdgs.ph.data.Prefs
 import org.tdgs.ph.data.Repository
 import org.tdgs.ph.ui.Fmt
@@ -58,6 +61,13 @@ fun SettingsScreen(repo: Repository) {
     var workoutSettings by remember { mutableStateOf(false) }
     if (workoutSettings) WorkoutUploadDialog(repo) { workoutSettings = false }
     Page(repo, "Settings") {
+        item {
+            PhCard(onClick = {
+                context.startActivity(Intent(context, WorkoutPlannerActivity::class.java).putExtra("model_settings", true))
+            }) {
+                Text("Trainer settings", style = MaterialTheme.typography.titleMedium)
+            }
+        }
         item {
             PhCard {
                 Text("Goals", style = MaterialTheme.typography.titleSmall)

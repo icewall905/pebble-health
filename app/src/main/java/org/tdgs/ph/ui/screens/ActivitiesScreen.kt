@@ -5,6 +5,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.tdgs.ph.planner.WorkoutPlannerActivity
 import org.tdgs.ph.workout.WorkoutActivity
 import org.tdgs.ph.workout.WorkoutEntry
 import org.tdgs.ph.workout.WorkoutStore
@@ -63,8 +64,14 @@ private fun icon(kind: String) = when (kind) {
 fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
     val state by repo.state.collectAsState()
     val d = state.dashboard
+    val context = LocalContext.current
     Page(repo, "Activities", d?.let { "${it.workouts.size} in the last 6 weeks" }) {
         item { WorkoutEntry() }
+        item {
+            PhCard(onClick = { context.startActivity(Intent(context, WorkoutPlannerActivity::class.java)) }) {
+                Text("Workout planner", style = MaterialTheme.typography.titleMedium)
+            }
+        }
         if (d == null) { item { Loading() }; return@Page }
         if (d.workouts.isEmpty()) { item { Empty("No activities recorded yet") }; return@Page }
         val zone = Fmt.zone(d.tz)
