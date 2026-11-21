@@ -40,6 +40,7 @@ object Fmt {
     }
     fun kind(kind: String): String = when (kind) {
         "walk" -> "Walk"; "run" -> "Run"; "open_workout", "workout" -> "Workout"
+        "beat_saber" -> "Beat Saber"
         else -> kind.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
     fun sleepWord(score: Int?): String = when {

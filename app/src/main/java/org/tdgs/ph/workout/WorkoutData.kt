@@ -4,7 +4,7 @@ import java.io.Writer
 import java.time.Instant
 import kotlin.math.*
 
-internal enum class Sport(val label: String, val gpsDefault: Boolean) {
+internal enum class Sport(val label: String, val gpsDefault: Boolean, val estimatedMet: Double? = null) {
     run("Running", true),
     hike("Hiking", true),
     walk("Walking", true),
@@ -13,6 +13,7 @@ internal enum class Sport(val label: String, val gpsDefault: Boolean) {
     tennis("Tennis", false),
     rowing("Rowing", false),
     yoga("Yoga", false),
+    beat_saber("Beat Saber", false, estimatedMet = 5.5),
     workout("Other workout", false),
 }
 
@@ -25,6 +26,13 @@ internal data class Workout(
     val interrupted: Boolean = false,
     val rpe: Int? = null,
 )
+
+/** Estimated total energy using the standard MET conversion (1 MET = 3.5 mL O₂/kg/min). */
+internal fun Workout.estimatedCalories(weightKg: Double?): Int? {
+    val met = sport.estimatedMet ?: return null
+    val weight = weightKg?.takeIf { it.isFinite() && it > 0 } ?: return null
+    return (met * 3.5 * weight / 200 * (active / 60_000.0)).roundToInt()
+}
 
 internal data class Fix(
     val time: Long, val active: Long, val segment: Int,

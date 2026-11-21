@@ -8,6 +8,15 @@ import kotlin.test.*
 
 class WorkoutDataTest {
     @Test
+    fun beatSaberCaloriesUseRecreationalBadmintonIntensityAndExcludePausedTime() {
+        val workout = Workout("beat-saber", Sport.beat_saber, 0, 45 * 60_000L, 30 * 60_000L)
+        assertFalse(workout.sport.gpsDefault)
+        assertEquals(202, workout.estimatedCalories(70.0))
+        assertNull(workout.estimatedCalories(null))
+        assertNull(workout.copy(sport = Sport.tennis).estimatedCalories(70.0))
+    }
+
+    @Test
     fun decodesBothBluetoothHeartRateFormatsAndRejectsLostContact() {
         assertEquals(165, decodeHeartRate(byteArrayOf(0, 165.toByte())))
         assertEquals(266, decodeHeartRate(byteArrayOf(1, 10, 1)))

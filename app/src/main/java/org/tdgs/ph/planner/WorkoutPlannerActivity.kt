@@ -31,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.saveable.rememberSaveable
+import org.tdgs.ph.ui.Fmt
 import org.tdgs.ph.ui.components.Note
 import org.tdgs.ph.ui.components.Segmented
 import androidx.compose.foundation.layout.Arrangement
@@ -443,7 +444,7 @@ internal fun workoutStatus(workout: JSONObject): String {
 
 @Composable
 internal fun WorkoutDescription(workout: JSONObject, timeOnly: Boolean = false) {
-    val title = workout.optString("title").ifBlank { workout.optString("kind", "Workout").replace('_', ' ') }
+    val title = workout.optString("title").ifBlank { Fmt.kind(workout.optString("kind", "Workout")) }
     val minutes = workout.optInt("minutes", (workout.optLong("seconds") / 60).toInt())
     Text(title, style = MaterialTheme.typography.titleMedium)
     val start = workout.optString("start")

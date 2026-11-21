@@ -43,6 +43,8 @@ import org.tdgs.ph.PhApp
 import org.tdgs.ph.data.Api
 import org.tdgs.ph.data.Prefs
 import org.tdgs.ph.data.Repository
+import org.tdgs.ph.ui.Fmt
+import org.tdgs.ph.ui.components.Note
 import org.tdgs.ph.ui.theme.LocalMetrics
 import org.tdgs.ph.ui.theme.PhTheme
 import java.time.Instant
@@ -436,6 +438,7 @@ private fun History(store: WorkoutStore, refresh: Int, open: (String) -> Unit) {
 @Composable
 private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: SnackbarHostState, back: () -> Unit) {
     val uploadConfig by repo.settings.workoutUploadConfig.collectAsState(initial = null)
+    val dashboard = repo.state.collectAsState().value.dashboard
     var uploadSettings by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -473,6 +476,11 @@ private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: 
         return
     }
     val workout = detail.workout
+    val calories = dashboard?.let { data ->
+        val workoutDay = Instant.ofEpochMilli(workout.start).atZone(Fmt.zone(data.tz)).toLocalDate().toString()
+        val weight = data.weight.filter { it.date <= workoutDay }.maxByOrNull { it.date }
+        workout.estimatedCalories(weight?.kg)
+    }
     val series = remember(detail) { workoutSeries(detail) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item {
@@ -485,6 +493,12 @@ private fun Review(repo: Repository, store: WorkoutStore, id: String, snackbar: 
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                 Readout("Active time", duration(workout.active))
                 Readout("Elapsed", duration(workout.end - workout.start))
+            }
+            if (calories != null) {
+                Column(Modifier.padding(top = 12.dp)) {
+                    Readout("Est. calories", "$calories kcal")
+                    Note("Based on active time and your logged weight.")
+                }
             }
             if (detail.route.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp), Arrangement.SpaceBetween) {
