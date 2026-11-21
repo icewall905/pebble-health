@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.tdgs.ph.checkin.TrainerCheckInSettings
 import org.tdgs.ph.data.Api
 import org.tdgs.ph.data.HubConfig
 import org.tdgs.ph.planner.WorkoutPlannerActivity
@@ -68,6 +69,7 @@ fun SettingsScreen(repo: Repository) {
                 Text("Trainer settings", style = MaterialTheme.typography.titleMedium)
             }
         }
+        item { TrainerCheckInSettings(repo) }
         item {
             PhCard {
                 Text("Goals", style = MaterialTheme.typography.titleSmall)

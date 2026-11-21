@@ -24,6 +24,8 @@ internal class PlannerApi(private val base: HttpUrl, private val settings: Setti
         .callTimeout(105, TimeUnit.SECONDS)
         .build()
 
+    suspend fun checkIn(payload: JSONObject) = JSONObject(request("api/planner/check-in", payload))
+
     suspend fun activityReview(payload: JSONObject) = JSONObject(request("api/planner/activity-review", payload))
 
     suspend fun load() = JSONObject(request("api/planner"))

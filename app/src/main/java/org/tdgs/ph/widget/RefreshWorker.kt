@@ -9,16 +9,18 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import org.tdgs.ph.PhApp
+import org.tdgs.ph.checkin.CheckInNotifier
 import java.util.concurrent.TimeUnit
 
 /** Refreshes the cached dashboard every 30 minutes on a network, then redraws widgets. */
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val repo = (applicationContext as PhApp).repository
-        if (repo.settings.current() == null) return Result.success()
-        val ok = repo.refresh().isSuccess
+        val hub = repo.settings.current() ?: return Result.success()
+        val result = repo.refresh()
         TodayWidget.refreshAll(applicationContext)
-        return if (ok) Result.success() else Result.retry()
+        result.getOrNull()?.let { CheckInNotifier.afterRefresh(applicationContext, repo, hub, it) }
+        return if (result.isSuccess) Result.success() else Result.retry()
     }
 
     companion object {

@@ -4,6 +4,8 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -12,6 +14,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.security.KeyStore
+import java.time.LocalDate
+import org.tdgs.ph.checkin.CheckInSettings
+import org.tdgs.ph.checkin.defaultCheckInTimes
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -31,6 +36,10 @@ class Settings(private val context: Context) {
     private val plannerSessionKey = stringPreferencesKey("planner_session_enc")
     private val stepGoalKey = intPreferencesKey("step_goal")
     private val sleepGoalKey = intPreferencesKey("sleep_goal_h")
+    private val checkInsEnabledKey = booleanPreferencesKey("trainer_check_ins")
+    private val checkInTimesKey = stringPreferencesKey("trainer_check_in_times")
+    private val checkInDayKey = stringPreferencesKey("trainer_check_in_day")
+    private val checkInSlotsKey = stringPreferencesKey("trainer_check_in_sent_slots")
     private val themeKey = stringPreferencesKey("theme")
 
     val config: Flow<HubConfig?> = context.store.data.map { p ->
@@ -62,6 +71,49 @@ class Settings(private val context: Context) {
         Prefs(p[stepGoalKey] ?: 8000, p[sleepGoalKey] ?: 8, p[themeKey] ?: "system")
     }
 
+    private fun checkInTimes(p: Preferences): Set<Int> = p[checkInTimesKey]?.split(',')
+        ?.mapNotNull { it.toIntOrNull()?.takeIf { minute -> minute in 0..1439 } }?.toSet()
+        ?.takeIf { it.size in 1..3 } ?: defaultCheckInTimes
+
+    private fun sentSlots(p: Preferences, day: LocalDate): Set<Int> =
+        if (p[checkInDayKey] == day.toString()) p[checkInSlotsKey].orEmpty().split(',')
+            .mapNotNull(String::toIntOrNull).toSet() else emptySet()
+
+    internal val checkInSettings: Flow<CheckInSettings> = context.store.data.map { p ->
+        CheckInSettings(p[checkInsEnabledKey] == true, checkInTimes(p))
+    }
+
+    internal suspend fun checkInsFor(day: LocalDate): CheckInSettings {
+        val p = context.store.data.first()
+        return CheckInSettings(p[checkInsEnabledKey] == true, checkInTimes(p), sentSlots(p, day))
+    }
+
+    internal suspend fun setCheckInsEnabled(enabled: Boolean) {
+        context.store.edit { it[checkInsEnabledKey] = enabled }
+    }
+
+    internal suspend fun setCheckInTimes(times: Set<Int>) {
+        require(times.size in 1..3 && times.all { it in 0..1439 })
+        context.store.edit { it[checkInTimesKey] = times.sorted().joinToString(",") }
+    }
+
+    internal suspend fun claimCheckIn(hub: HubConfig, day: LocalDate, minute: Int): Boolean {
+        var claimed = false
+        context.store.edit { p ->
+            val times = checkInTimes(p)
+            val sent = sentSlots(p, day)
+            val token = p[tokenKey]?.let { runCatching { decrypt(it) }.getOrNull() }
+            if (p[urlKey] == hub.baseUrl && token == hub.token && p[checkInsEnabledKey] == true &&
+                minute in times && minute !in sent && sent.size < times.size
+            ) {
+                p[checkInDayKey] = day.toString()
+                p[checkInSlotsKey] = (sent + minute).joinToString(",")
+                claimed = true
+            }
+        }
+        return claimed
+    }
+
     suspend fun current(): HubConfig? = config.first()
 
     suspend fun plannerCookie(origin: String): String? =
@@ -84,6 +136,7 @@ class Settings(private val context: Context) {
             ) {
                 it.remove(uploadTokenKey)
                 it.remove(plannerSessionKey)
+                it.remove(checkInsEnabledKey)
             }
             it[urlKey] = config.baseUrl
             it[tokenKey] = encrypted
@@ -95,6 +148,7 @@ class Settings(private val context: Context) {
         it.remove(tokenKey)
         it.remove(uploadTokenKey)
         it.remove(plannerSessionKey)
+        it.remove(checkInsEnabledKey)
     }
 
     suspend fun setStepGoal(v: Int) = context.store.edit { it[stepGoalKey] = v.coerceIn(1000, 50000) }
