@@ -44,7 +44,7 @@ class Api(private val client: OkHttpClient = defaultClient) {
             val confirmation = runCatching { Json.parseToJsonElement(response.body.string()) as? JsonObject }.getOrNull()
             val expected = "phone:" + (payload["id"] as? JsonPrimitive)?.content
             if ((confirmation?.get("id") as? JsonPrimitive)?.content != expected) {
-                throw ApiException("PebbleFit did not confirm the workout")
+                throw ApiException("The dashboard did not confirm the workout")
             }
         }
     }
@@ -58,8 +58,8 @@ class Api(private val client: OkHttpClient = defaultClient) {
 
     private fun uploadError(code: Int) = ApiException(when (code) {
         401, 403 -> "The hub rejected the history upload token."
-        404, 405 -> "Update your PebbleFit hub to enable phone workout uploads."
-        409 -> "PebbleFit already has a different workout with this ID."
+        404, 405 -> "Update your Pebble Health hub to enable phone workout uploads."
+        409 -> "The dashboard already has a different workout with this ID."
         else -> "The hub returned HTTP $code."
     }, code)
 

@@ -28,6 +28,11 @@ internal class PlannerApi(private val base: HttpUrl, private val settings: Setti
 
     suspend fun activityReview(payload: JSONObject) = JSONObject(request("api/planner/activity-review", payload))
 
+    suspend fun workoutUploadToken(): String =
+        JSONObject(request("api/pair", JSONObject(), pairingKind = "history")).getString("token")
+
+    suspend fun editWorkout(payload: JSONObject) { request("api/workout-edits", payload) }
+
     suspend fun load() = JSONObject(request("api/planner"))
     suspend fun history(month: String) = JSONObject(request("api/planner/history", month = month))
     suspend fun calendar() = request("api/planner/calendar.ics")
@@ -47,10 +52,11 @@ internal class PlannerApi(private val base: HttpUrl, private val settings: Setti
         }
     }
 
-    private suspend fun request(path: String, body: JSONObject? = null, month: String? = null): String =
+    private suspend fun request(path: String, body: JSONObject? = null, month: String? = null, pairingKind: String? = null): String =
         withContext(Dispatchers.IO) {
             val url = origin.newBuilder().addPathSegments(path).apply {
                 if (month != null) addQueryParameter("month", month)
+                if (pairingKind != null) addQueryParameter("kind", pairingKind)
             }.build()
             val builder = Request.Builder().url(url)
             if (path != "auth/login") {

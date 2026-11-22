@@ -50,12 +50,12 @@ internal fun WorkoutMap(route: List<Fix>, follow: Boolean = false) {
     val prefs = remember { context.getSharedPreferences("workout_setup", 0) }
     var enabled by remember { mutableStateOf(prefs.getBoolean("street_map", false)) }
     if (!enabled) {
-        RouteTrace(route)
-        TextButton(onClick = {
+        FilledTonalButton(modifier = Modifier.fillMaxWidth(), onClick = {
             prefs.edit().putBoolean("street_map", true).apply()
             enabled = true
         }) { Text("Show street map") }
         Text("Street maps request tiles for the visible area from OpenStreetMap.", style = MaterialTheme.typography.bodySmall)
+        RouteTrace(route)
         return
     }
     val stride = (route.size / 2000).coerceAtLeast(1)

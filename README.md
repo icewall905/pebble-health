@@ -73,12 +73,14 @@ Open **Activities → Log workout**, choose a sport, and turn on phone GPS if yo
 Wear your Bluetooth chest strap and tap **Find chest strap** to select it. Workout history
 and GPX export are available offline.
 
-To send summaries to the hub, create a separate history upload token from the PebbleFit web
-dashboard with **Create upload token**, then enter it under **Settings → Workout upload token**.
-New recordings upload automatically once a history upload token is configured. To send an older
-recording, open it and tap **Queue upload**. The app sends elapsed and active time,
-distance, effort, and heart-rate summaries to `POST /fitness/phone-workouts`. GPS coordinates
-and strength sets stay on the phone. The dashboard token remains read-only.
+Workout summaries sync using your existing Pebble Health dashboard sign-in in the app.
+If you have only signed in through a browser, open **Settings → Dashboard sign-in** once.
+The app requests the upload token and queues unsynced local workouts automatically. Use
+**Sync now** from a saved recording to retry. GPS coordinates and strength sets stay on the phone.
+
+To clean up duplicate watch activities, open the unwanted activity and choose
+**Remove from dashboard**. This excludes it from training totals, and **Show removed**
+lets you restore it later. **Delete from phone** removes the local recording itself.
 
 ### Live map and watch stats
 

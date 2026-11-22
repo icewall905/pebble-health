@@ -47,7 +47,7 @@ internal fun WorkoutLogEditor(existing: Workout?, saving: Boolean, lockMetrics: 
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (lockMetrics) {
-                    Text("${sport.label} · Sent to PebbleFit")
+                    Text("${sport.label} · Synced to dashboard")
                 } else Box {
                     OutlinedButton(onClick = { types = true }, enabled = !saving) { Text(sport.label) }
                     DropdownMenu(expanded = types, onDismissRequest = { types = false }) {

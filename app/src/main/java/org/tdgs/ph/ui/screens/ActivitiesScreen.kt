@@ -9,6 +9,8 @@ import org.tdgs.ph.planner.WorkoutPlannerActivity
 import org.tdgs.ph.workout.ActivityTrainerReview
 import org.tdgs.ph.workout.TrainerReviewEntry
 import org.tdgs.ph.workout.WorkoutActivity
+import org.tdgs.ph.workout.DashboardActivityRemoval
+import org.tdgs.ph.workout.WorkoutUploadWorker
 import org.tdgs.ph.workout.WorkoutEntry
 import org.tdgs.ph.workout.WorkoutStore
 import androidx.compose.foundation.background
@@ -80,6 +82,7 @@ private data class ActivityLogRow(
     val title: String? = null,
     val badge: String? = null,
     val distanceM: Double? = null,
+    val removed: Boolean = false,
 )
 
 @Composable
@@ -91,6 +94,7 @@ fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
     var refresh by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
         refresh++
+        WorkoutUploadWorker.enqueueMissing(context)
         onPauseOrDispose { }
     }
     val local by produceState<Result<List<WorkoutStore.HistoryEntry>>?>(null, refresh) {
@@ -108,17 +112,22 @@ fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
         val hub = d?.workouts.orEmpty().associateBy { it.id }
         val localIds = localRows.mapTo(mutableSetOf()) { it.id }
         (localRows.map { row -> row.copy(distanceM = row.distanceM ?: hub[row.id]?.distanceM,
-                badge = if (hub[row.id]?.excluded == true) "Excluded" else row.badge) } +
+                badge = if (hub[row.id]?.ignored == true) "Removed" else row.badge,
+                removed = hub[row.id]?.ignored == true) } +
             hub.values.filterNot { it.id in localIds }.map {
                 ActivityLogRow(it.id, it.kind, it.start, it.activeSeconds ?: it.seconds,
-                    badge = if (it.excluded) "Excluded" else null, distanceM = it.distanceM)
+                    badge = if (it.ignored) "Removed" else if (it.excluded) "Excluded" else if (it.id.startsWith("pebble:")) "Watch" else null,
+                    distanceM = it.distanceM, removed = it.ignored)
             }).sortedByDescending { it.start }
     }
     var kind by rememberSaveable { mutableStateOf<String?>(null) }
     var filterOpen by remember { mutableStateOf(false) }
     val kinds = remember(logs) { logs.map { it.kind }.distinct().sortedBy(Fmt::kind) }
     val selected = kind?.takeIf { it in kinds }
-    val filtered = remember(logs, selected) { if (selected == null) logs else logs.filter { it.kind == selected } }
+    var showRemoved by rememberSaveable { mutableStateOf(false) }
+    val filtered = remember(logs, selected, showRemoved) {
+        logs.filter { (showRemoved || !it.removed) && (selected == null || it.kind == selected) }
+    }
     Page(repo, "Activities", null) {
         item { WorkoutEntry() }
         item {
@@ -150,6 +159,9 @@ fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
                     }
                 }
             }
+        }
+        if (logs.any { it.removed }) item {
+            TextButton(onClick = { showRemoved = !showRemoved }) { Text(if (showRemoved) "Hide removed" else "Show removed") }
         }
         val zone = Fmt.zone(tz)
         filtered.groupBy {
@@ -226,6 +238,7 @@ fun ActivityDetailScreen(repo: Repository, id: String, back: () -> Unit) {
     }
     Page(repo, w?.let { Fmt.kind(it.kind) } ?: "Activity", w?.let { Fmt.dateTime(it.start, d.tz) }, back = back) {
         if (w == null) { item { Empty("Activity not found") }; return@Page }
+        item { DashboardActivityRemoval(repo, w) }
         item { TrainerReviewEntry { trainerReview = true } }
         if (phoneWorkout) {
             item {

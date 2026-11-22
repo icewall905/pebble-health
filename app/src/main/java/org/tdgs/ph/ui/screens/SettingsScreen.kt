@@ -100,7 +100,7 @@ fun SettingsScreen(repo: Repository) {
                     Button(onClick = { scope.launch { repo.refresh(); RefreshWorker.updateWidgets(context) } }) { Text("Refresh now") }
                     OutlinedButton(onClick = { scope.launch { repo.settings.clear(); repo.forget() } }) { Text("Disconnect") }
                 }
-                OutlinedButton(onClick = { workoutSettings = true }) { Text("Workout upload token") }
+                OutlinedButton(onClick = { workoutSettings = true }) { Text("Dashboard sign-in") }
             }
         }
         item {

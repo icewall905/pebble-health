@@ -175,6 +175,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
                         val saved = withContext(Dispatchers.IO) { runCatching { store.saveLog(workout, new = true) } }
                         saving = false
                         if (saved.isSuccess) {
+                            WorkoutUploadWorker.enqueue(context, workout.id)
                             adding = false
                             history = true
                             detailId = workout.id
@@ -406,6 +407,7 @@ private fun Recording(state: LiveWorkout) {
                 }
             }
             if (state.route.isNotEmpty()) item { WorkoutMap(state.route, follow = true) }
+            else if (state.gpsStatus.isNotEmpty()) item { Text("Map appears after the first usable GPS fix.") }
         }
         HorizontalDivider()
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -499,7 +501,6 @@ private fun Review(
     repo: Repository, store: WorkoutStore, id: String, snackbar: SnackbarHostState,
     trainerReview: Boolean, showTrainerReview: (Boolean) -> Unit, back: () -> Unit,
 ) {
-    val uploadConfig by repo.settings.workoutUploadConfig.collectAsState(initial = null)
     val dashboard = repo.state.collectAsState().value.dashboard
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -575,12 +576,16 @@ private fun Review(
                     Text("${workoutDate(workout.start)} · ${if (workout.manual) "${workout.sport.label} · Manual entry" else workout.sport.label}",
                         color = MaterialTheme.colorScheme.primary)
                     Text(workout.title ?: workout.sport.label, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
-                    Text(if (uploaded) "Saved on this phone · Sent to PebbleFit" else "Saved on this phone",
+                    Text(if (uploaded) "Saved on this phone · Synced to dashboard" else "Saved on this phone",
                         style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                     TextButton(enabled = !busy, onClick = { editing = true }) { Text("Edit activity") }
                     if (workout.interrupted) Text("Interrupted recording", color = MaterialTheme.colorScheme.secondary)
                 }
-                if (selected == "Overview" && detail.route.isNotEmpty()) item { WorkoutMap(detail.route) }
+                if (selected == "Overview") item {
+                    if (detail.route.isNotEmpty()) WorkoutMap(detail.route)
+                    else Text("This activity has no GPS samples. Turn on Phone GPS before starting a recording to get a map.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 if (selected == "Overview") item {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                         Readout("Active time", duration(workout.active))
@@ -667,20 +672,20 @@ private fun Review(
                         }
                     }
                     if (!uploaded) {
-                        Text(if (uploadConfig == null) "On this phone. Set up automatic uploads in Settings → Workout upload token."
-                            else if (busy) "Saved locally. PebbleFit upload queued."
-                            else if (uploadFailed) "Saved locally. Upload failed. Check the history token in Settings."
-                            else "Saved locally. PebbleFit uploads run in the background.")
-                        if (uploadConfig != null) TextButton(enabled = !busy && workout.active >= 1000, onClick = {
+                        Text(if (busy) "Saved on this phone. Dashboard sync queued."
+                            else if (uploadFailed) "Saved on this phone. Check Dashboard sign-in in Settings to sync."
+                            else "Saved on this phone. Dashboard sync runs in the background.")
+                        TextButton(enabled = !busy && workout.active >= 1000, onClick = {
                             WorkoutUploadWorker.enqueue(context, id)
-                            scope.launch { snackbar.showSnackbar("Workout queued for PebbleFit.") }
-                        }) { Text("Queue upload") }
+                            scope.launch { snackbar.showSnackbar("Workout queued for dashboard sync.") }
+                        }) { Text("Sync now") }
                     }
                     if (detail.route.isNotEmpty()) {
                         OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                             export.launch("${workout.sport.name}-${Instant.ofEpochMilli(workout.start).atZone(ZoneId.systemDefault()).toLocalDate()}.gpx")
                         }) { Text("Save GPX") }
                     }
+                    dashboard?.workouts?.firstOrNull { it.id == "phone:$id" }?.let { DashboardActivityRemoval(repo, it) }
                     TextButton(enabled = !busy, onClick = { delete = true }) { Text("Delete from phone") }
                 }
             }
