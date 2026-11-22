@@ -36,7 +36,7 @@ internal class WorkoutWatch(context: Context) : AutoCloseable {
         val values = listOf(state.active.div(1000).toInt(), state.distance.roundToInt(),
             state.livePace?.div(1000)?.toInt() ?: 0, state.bpm ?: 0,
             if (finished) 2 else if (state.paused) 1 else 0,
-            state.heartZone?.plus(1) ?: 0, state.strapBattery?.plus(1) ?: 0)
+            state.heartZone?.plus(1) ?: 0, state.strapBattery?.plus(1) ?: 0, state.maxBpm)
         val data = values.mapIndexed { key, value ->
             key.toUInt() to PebbleDictionaryItem.UInt32(value.toUInt())
         }.toMap()

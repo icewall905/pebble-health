@@ -96,7 +96,8 @@ In GravelEx, enable **PebbleKit 2** under Watch App Permissions and allow Pebble
 prompted. Enable **Launch Workout Live on start** in Pebble Health. The recording screen
 shows whether the watch is receiving stats. The watch receives active time, distance, live
 pace and heart rate from the recording phone. Use **Set max HR for zones** before recording
-to show your current zone on the phone and watch. Strap battery appears when the sensor
+to show your current zone on the phone and watch. Workout Live fills your active zone
+and marks your position within it. Strap battery appears when the sensor
 exposes a readable Bluetooth Battery Level. Use **Open Workout Live** on the recording
 screen to retry launching it. The bundled app targets Aplite, Basalt, Chalk, Diorite,
 and Emery. To rebuild it with the Pebble SDK, run `pebble build` in `watchapp/` and copy
