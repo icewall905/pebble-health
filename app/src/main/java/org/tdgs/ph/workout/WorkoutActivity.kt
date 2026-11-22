@@ -200,6 +200,13 @@ private fun Setup(visible: Boolean) {
     var address by rememberSaveable { mutableStateOf(settings.getString("strap_address", null)) }
     var strapName by rememberSaveable { mutableStateOf(settings.getString("strap_name", null)) }
     var mirrorWatch by rememberSaveable { mutableStateOf(settings.getBoolean("mirror_watch", false)) }
+    var maxBpm by remember { mutableIntStateOf(settings.getInt("max_bpm", 0)) }
+    var editingMax by remember { mutableStateOf(false) }
+    if (editingMax) MaxHeartRateDialog(maxBpm, { editingMax = false }) {
+        settings.edit().putInt("max_bpm", it).apply()
+        maxBpm = it
+        editingMax = false
+    }
     var scanning by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
@@ -338,6 +345,11 @@ private fun Setup(visible: Boolean) {
                 Switch(mirrorWatch, { mirrorWatch = it; settings.edit().putBoolean("mirror_watch", it).apply() })
             }
         }
+        item {
+            TextButton(onClick = { editingMax = true }) {
+                Text(if (maxBpm == 0) "Set max HR for zones" else "Max heart rate: $maxBpm bpm")
+            }
+        }
         if (scanning) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         message?.let { item { Text(it, color = MaterialTheme.colorScheme.secondary) } }
         item {
@@ -383,6 +395,9 @@ private fun Recording(state: LiveWorkout) {
                         Box(Modifier.weight(1f)) { Readout("Distance", if (state.gpsStatus.isNotEmpty()) distance(state.distance) else "—") }
                         Box(Modifier.weight(1f)) { Readout("Heart rate", state.bpm?.let { "$it bpm" } ?: "—") }
                     }
+                    state.heartZone?.let { zone ->
+                        Readout("Heart-rate zone", if (zone == 0) "Below zone 1" else "Zone $zone")
+                    }
                     if (state.gpsStatus.isNotEmpty()) Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
                         val cycling = state.workout.sport == Sport.cycle
                         Box(Modifier.weight(1f)) {
@@ -402,7 +417,11 @@ private fun Recording(state: LiveWorkout) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (state.gpsStatus.isNotEmpty()) Text(state.gpsStatus)
                         if (state.strapStatus.isNotEmpty()) Text(state.strapStatus)
+                        state.strapBattery?.let { Text("Chest strap battery: $it%") }
                         if (state.watchStatus.isNotEmpty()) Text(state.watchStatus)
+                        if (state.mirrorWatch && state.watchStatus != "Live stats on Pebble") {
+                            TextButton(onClick = { command(WorkoutRecorder.OPEN_WATCH) }) { Text("Open Workout Live") }
+                        }
                     }
                 }
             }
@@ -789,28 +808,29 @@ private fun HeartZones(heart: List<Pulse>) {
             )
         }
     }
-    if (editing) {
-        var input by rememberSaveable { mutableStateOf(maxBpm.takeIf { it > 0 }?.toString().orEmpty()) }
-        val value = input.toIntOrNull()
-        AlertDialog(
-            onDismissRequest = { editing = false },
-            title = { Text("Maximum heart rate") },
-            text = {
-                OutlinedTextField(input, { input = it.take(3) }, label = { Text("Maximum BPM") },
-                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            },
-            confirmButton = {
-                TextButton(enabled = value != null && value in 100..240, onClick = {
-                    if (value != null) {
-                        settings.edit().putInt("max_bpm", value).apply()
-                        maxBpm = value
-                        editing = false
-                    }
-                }) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel") } },
-        )
+    if (editing) MaxHeartRateDialog(maxBpm, { editing = false }) {
+        settings.edit().putInt("max_bpm", it).apply()
+        maxBpm = it
+        editing = false
     }
+}
+
+@Composable
+private fun MaxHeartRateDialog(maxBpm: Int, dismiss: () -> Unit, save: (Int) -> Unit) {
+    var input by rememberSaveable { mutableStateOf(maxBpm.takeIf { it > 0 }?.toString().orEmpty()) }
+    val value = input.toIntOrNull()?.takeIf { it in 100..240 }
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Maximum heart rate") },
+        text = {
+            OutlinedTextField(input, { input = it.take(3) }, label = { Text("Maximum BPM") },
+                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+        },
+        confirmButton = {
+            TextButton(enabled = value != null, onClick = { value?.let(save) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

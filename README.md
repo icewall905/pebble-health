@@ -73,7 +73,7 @@ Open **Activities → Log workout**, choose a sport, and turn on phone GPS if yo
 Wear your Bluetooth chest strap and tap **Find chest strap** to select it. Workout history
 and GPX export are available offline. If the strap includes beat-to-beat intervals or its
 energy counter in Bluetooth heart-rate notifications, those readings are saved with the
-workout. Use **Export strap CSV** in the workout details to export them.
+workout. Use **Export chest strap CSV** in the workout details to export them.
 
 Workout summaries sync using your existing Pebble Health dashboard sign-in in the app.
 If you have only signed in through a browser, open **Settings → Dashboard sign-in** once.
@@ -95,7 +95,10 @@ In **Settings → Workouts**, select the Pebble phone app that manages your watc
 In GravelEx, enable **PebbleKit 2** under Watch App Permissions and allow Pebble Health if
 prompted. Enable **Launch Workout Live on start** in Pebble Health. The recording screen
 shows whether the watch is receiving stats. The watch receives active time, distance, live
-pace and heart rate from the recording phone. The bundled app targets Aplite, Basalt, Chalk, Diorite,
+pace and heart rate from the recording phone. Use **Set max HR for zones** before recording
+to show your current zone on the phone and watch. Strap battery appears when the sensor
+exposes a readable Bluetooth Battery Level. Use **Open Workout Live** on the recording
+screen to retry launching it. The bundled app targets Aplite, Basalt, Chalk, Diorite,
 and Emery. To rebuild it with the Pebble SDK, run `pebble build` in `watchapp/` and copy
 `watchapp/build/watchapp.pbw` to `app/src/main/assets/Workout-Live.pbw`.
 

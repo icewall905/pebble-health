@@ -37,7 +37,11 @@ internal data class LiveWorkout(
     val livePace: Long? = null,
     val mirrorWatch: Boolean = false,
     val watchStatus: String = "",
-)
+    val maxBpm: Int = 0,
+    val strapBattery: Int? = null,
+) {
+    val heartZone: Int? get() = bpm?.let { heartZone(it.toDouble(), maxBpm) }
+}
 
 internal class WorkoutRecorder : Service(), LocationListener {
     private var watch: WorkoutWatch? = null
@@ -109,6 +113,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
                 val sport = intent.getStringExtra("sport")?.let { Sport.valueOf(it) }
                 if (sport == null) stopSelf() else start(sport, intent.getBooleanExtra("gps", false), intent.getStringExtra("strap"), intent.getBooleanExtra("mirror_watch", false))
             }
+            OPEN_WATCH -> launchWatch()
             PAUSE -> pause()
             RESUME -> resume()
             LAP -> live.value?.takeIf { !it.paused }?.let { state ->
@@ -160,27 +165,46 @@ internal class WorkoutRecorder : Service(), LocationListener {
         if (!persist { store.start(workout) }) return
         error.value = null
         finished.value = null
-        live.value = LiveWorkout(workout, mirrorWatch = mirrorWatch, gpsStatus = if (gps && !wantsGps) "Precise location permission unavailable" else "")
+        live.value = LiveWorkout(
+            workout,
+            mirrorWatch = mirrorWatch,
+            watchStatus = if (mirrorWatch) "Opening Workout Live on Pebble…" else "",
+            maxBpm = getSharedPreferences("workout_setup", 0).getInt("max_bpm", 0),
+            gpsStatus = if (gps && !wantsGps) "Precise location permission unavailable" else "",
+        )
         sessionWall = now
         sessionStart = SystemClock.elapsedRealtime()
         runStart = sessionStart
         if (mirrorWatch) {
-            val connection = WorkoutWatch(this)
-            watch = connection
-            watchJob = watchScope.launch {
-                try { connection.launch() }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { /* The next data attempt reports connection status. */ }
-            }
+            watch = WorkoutWatch(this)
+            launchWatch()
         }
         requestGps()
         if (hasStrap) {
             strap = ChestStrap(this, address, { status ->
                 lastBpm = null
-                live.value?.let { live.value = it.copy(strapStatus = status, bpm = null) }
-            }, ::recordPulse).also { it.connect() }
+                live.value?.let { live.value = it.copy(strapStatus = status, bpm = null, strapBattery = null) }
+            }, ::recordPulse, battery = { level ->
+                live.value?.let { live.value = it.copy(strapBattery = level) }
+            }).also { it.connect() }
         }
         handler.post(ticker)
+    }
+
+    private fun launchWatch() {
+        val connection = watch ?: return
+        live.value?.let { live.value = it.copy(watchStatus = "Opening Workout Live on Pebble…") }
+        val previous = watchJob
+        watchJob = watchScope.launch {
+            try {
+                previous?.cancelAndJoin()
+                connection.launch()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The next live update reports the connection status.
+            }
+        }
     }
 
     private fun granted(permission: String) = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -336,6 +360,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
 
     companion object {
         const val START = "start"
+        const val OPEN_WATCH = "open_watch"
         const val PAUSE = "pause"
         const val RESUME = "resume"
         const val LAP = "lap"

@@ -150,13 +150,16 @@ internal fun heartBuckets(heart: List<Pulse>, activeSeconds: Int): List<HeartBuc
         }
 
 
+/** Zone zero is below 50%; zones 1 through 5 begin at 50% through 90%. */
+internal fun heartZone(bpm: Double, maxBpm: Int): Int? =
+    maxBpm.takeIf { it in 100..240 }?.let { ((bpm * 100 / it).toInt() / 10 - 4).coerceIn(0, 5) }
+
 /** Six groups, beginning below 50% of configured maximum heart rate. */
 internal fun zoneSeconds(samples: List<Pulse>, maxBpm: Int): List<Int> {
     require(maxBpm in 100..240)
     val result = MutableList(6) { 0 }
     samples.groupBy { it.active / 1000 }.values.forEach { second ->
-        val percent = second.map { it.bpm }.average() / maxBpm * 100
-        result[(percent.toInt() / 10 - 4).coerceIn(0, 5)]++
+        heartZone(second.map { it.bpm }.average(), maxBpm)?.let { result[it]++ }
     }
     return result
 }

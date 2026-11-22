@@ -11,6 +11,13 @@ import kotlin.test.*
 
 class WorkoutDataTest {
     @Test
+    fun liveHeartRateZonesUseConfiguredMaximum() {
+        assertNull(heartZone(150.0, 0))
+        val boundaryBpm = listOf(99.0, 100.0, 120.0, 140.0, 160.0, 180.0, 205.0)
+        assertEquals(listOf(0, 1, 2, 3, 4, 5, 5), boundaryBpm.map { heartZone(it, 200) })
+    }
+
+    @Test
     fun decodesOptionalEnergyAndAllCompleteRrIntervals() {
         val sample = decodeHeartMeasurement(byteArrayOf(24, 120, 44, 1, 0, 4, 0, 3, 44))
         assertEquals(120, sample?.bpm)

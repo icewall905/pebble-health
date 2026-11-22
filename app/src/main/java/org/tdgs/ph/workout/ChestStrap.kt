@@ -12,6 +12,8 @@ import android.os.ParcelUuid
 import java.util.UUID
 
 internal fun bluetoothUuid(shortId: String) = UUID.fromString("0000$shortId-0000-1000-8000-00805f9b34fb")
+private val batteryService = bluetoothUuid("180f")
+private val batteryLevel = bluetoothUuid("2a19")
 internal val heartService = bluetoothUuid("180d")
 internal val heartScanFilter = ScanFilter.Builder().setServiceUuid(ParcelUuid(heartService)).build()
 internal val heartScanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -22,6 +24,7 @@ internal class ChestStrap(
     private val address: String,
     private val status: (String) -> Unit,
     private val pulse: (HeartMeasurement) -> Unit,
+    private val battery: (Int) -> Unit,
 ) : AutoCloseable {
     private val app = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -99,9 +102,31 @@ internal class ChestStrap(
             if (result == BluetoothGatt.GATT_SUCCESS) {
                 handler.removeCallbacks(deadline)
                 status("Chest strap connected")
+                device.getService(batteryService)?.getCharacteristic(batteryLevel)?.let {
+                    if (it.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0) {
+                        device.readCharacteristic(it)
+                    }
+                }
             } else {
                 retry("Could not subscribe to heart rate")
             }
+        }
+
+        override fun onCharacteristicRead(
+            device: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            result: Int,
+        ) = current(device) {
+            if (characteristic.uuid == batteryLevel && result == BluetoothGatt.GATT_SUCCESS) {
+                value.firstOrNull()?.toInt()?.takeIf { it in 0..100 }?.let(battery)
+            }
+        }
+
+        @Deprecated("Compatibility callback for Android 12 and earlier")
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicRead(device: BluetoothGatt, characteristic: BluetoothGattCharacteristic, result: Int) {
+            characteristic.value?.let { onCharacteristicRead(device, characteristic, it, result) }
         }
 
         override fun onCharacteristicChanged(device: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
