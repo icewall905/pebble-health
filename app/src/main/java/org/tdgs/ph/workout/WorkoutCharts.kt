@@ -88,7 +88,7 @@ internal fun workoutSeries(detail: WorkoutDetail): WorkoutSeries {
     return WorkoutSeries(heart, avg, paces, altitude, ascent.takeIf { altitude.size >= 2 }, splits)
 }
 
-internal fun WorkoutDetail.pebbleFitPayload(): JsonObject = buildJsonObject {
+internal fun WorkoutDetail.pebbleFitPayload(includeDetails: Boolean = false): JsonObject = buildJsonObject {
     val active = (workout.active / 1000).toInt()
     val elapsed = ((workout.end - workout.start + 999) / 1000).toInt().coerceIn(active, 172800)
     put("id", workout.id)
@@ -102,6 +102,37 @@ internal fun WorkoutDetail.pebbleFitPayload(): JsonObject = buildJsonObject {
         heartBuckets(heart, active).forEach { bucket ->
             add(buildJsonArray { add(bucket.offset); add(bucket.bpm); add(bucket.seconds) })
         }
+    })
+    if (includeDetails) put("detail", dashboardDetail())
+
+}
+
+private fun <T> List<T>.dashboardSamples(): List<T> =
+    if (size <= 4000) this else List(4000) { index -> this[(index.toLong() * lastIndex / 3999).toInt()] }
+
+private fun WorkoutDetail.dashboardDetail(): JsonObject = buildJsonObject {
+    val series = workoutSeries(this@dashboardDetail)
+    workout.title?.let { put("title", it.take(120)) }
+    workout.notes?.let { put("notes", it.take(4000)) }
+    series.averageBpm?.let { put("average_bpm", it) }
+    heart.maxOfOrNull { it.bpm }?.let { put("peak_bpm", it) }
+    series.elevationGain?.let { put("ascent", it) }
+    put("route", buildJsonArray {
+        route.dashboardSamples().forEach { fix -> add(buildJsonArray { add(fix.lat); add(fix.lon); add(fix.segment) }) }
+    })
+    mapOf("heart" to series.heart, "pace" to series.pace, "elevation" to series.altitude).forEach { (key, points) ->
+        put(key, buildJsonArray {
+            points.dashboardSamples().forEach { point ->
+                add(buildJsonArray { add(point.time / 1000.0); add(if (key == "pace") point.value / 1000 else point.value); add(point.segment) })
+            }
+        })
+    }
+    put("laps", buildJsonArray { laps.take(4000).forEach { lap -> add(buildJsonArray { add(lap.active / 1000.0); add(lap.meters) }) } })
+    put("splits", buildJsonArray { series.splits.take(4000).forEach { split -> add(buildJsonArray { add(split / 1000.0) }) } })
+    put("sets", buildJsonArray {
+        sets.take(500).forEach { set -> add(buildJsonArray {
+            add(set.exercise); add(set.reps); add(set.kg?.let(::JsonPrimitive) ?: JsonNull)
+        }) }
     })
 }
 

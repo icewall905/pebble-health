@@ -150,6 +150,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         sessionWall = now
         sessionStart = SystemClock.elapsedRealtime()
         runStart = sessionStart
+        if (mirrorWatch) watch.launch()
         requestGps()
         if (hasStrap) {
             strap = ChestStrap(this, address, { status ->

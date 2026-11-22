@@ -332,11 +332,10 @@ private fun Setup(visible: Boolean) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Live stats on Pebble", style = MaterialTheme.typography.titleMedium)
-                    Text("Open Workout Live on the watch. Requires Legacy PebbleKit in GravelEx.",
+                    Text("Opens Workout Live on the watch when you start. Install it from Pebble Health Settings.",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(mirrorWatch, { mirrorWatch = it; settings.edit().putBoolean("mirror_watch", it).apply() })
-            InstallWorkoutWatch()
             }
         }
         if (scanning) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -675,11 +674,11 @@ private fun Review(
                         Text(if (busy) "Saved on this phone. Dashboard sync queued."
                             else if (uploadFailed) "Saved on this phone. Check Dashboard sign-in in Settings to sync."
                             else "Saved on this phone. Dashboard sync runs in the background.")
-                        TextButton(enabled = !busy && workout.active >= 1000, onClick = {
-                            WorkoutUploadWorker.enqueue(context, id)
-                            scope.launch { snackbar.showSnackbar("Workout queued for dashboard sync.") }
-                        }) { Text("Sync now") }
                     }
+                    TextButton(enabled = !busy && workout.active >= 1000, onClick = {
+                        WorkoutUploadWorker.enqueue(context, id)
+                        scope.launch { snackbar.showSnackbar("Workout queued for dashboard sync.") }
+                    }) { Text("Sync now") }
                     if (detail.route.isNotEmpty()) {
                         OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                             export.launch("${workout.sport.name}-${Instant.ofEpochMilli(workout.start).atZone(ZoneId.systemDefault()).toLocalDate()}.gpx")

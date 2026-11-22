@@ -20,6 +20,11 @@ internal fun recentPace(route: List<Fix>, active: Long): Long? {
 }
 
 internal class WorkoutWatch(private val context: Context) {
+    fun launch() {
+        context.sendBroadcast(Intent("com.getpebble.action.app.START").setPackage("tdgs.gravel")
+            .putExtra("uuid", WATCH_UUID))
+    }
+
     private var transaction = 0
     fun update(state: LiveWorkout, finished: Boolean = false) {
         val values = listOf(state.active.div(1000).toInt(), state.distance.roundToInt(),

@@ -27,7 +27,8 @@ internal class WorkoutUploadWorker(context: Context, parameters: WorkerParameter
         if (detail.workout.active < 1000) return@withContext Result.success()
         try {
             val token = resolveToken(settings, config)
-            val payload = detail.pebbleFitPayload()
+            val includeDetails = app.getSharedPreferences("workout_setup", 0).getBoolean("sync_activity_details", false)
+            val payload = detail.pebbleFitPayload(includeDetails)
             try {
                 Api().uploadWorkout(token, payload)
             } catch (error: ApiException) {

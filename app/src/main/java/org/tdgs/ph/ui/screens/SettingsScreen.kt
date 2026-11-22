@@ -50,6 +50,8 @@ import org.tdgs.ph.ui.theme.LocalMetrics
 import org.tdgs.ph.widget.RefreshWorker
 import org.tdgs.ph.workout.WorkoutEntry
 import org.tdgs.ph.workout.WorkoutUploadDialog
+import org.tdgs.ph.workout.InstallWorkoutWatch
+import androidx.compose.material3.Switch
 
 @Composable
 fun SettingsScreen(repo: Repository) {
@@ -67,6 +69,25 @@ fun SettingsScreen(repo: Repository) {
                 context.startActivity(Intent(context, WorkoutPlannerActivity::class.java).putExtra("model_settings", true))
             }) {
                 Text("Trainer settings", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        item {
+            val workoutPreferences = remember { context.getSharedPreferences("workout_setup", 0) }
+            var watch by remember { mutableStateOf(workoutPreferences.getBoolean("mirror_watch", false)) }
+            var details by remember { mutableStateOf(workoutPreferences.getBoolean("sync_activity_details", false)) }
+            PhCard {
+                Text("Workouts", style = MaterialTheme.typography.titleMedium)
+                InstallWorkoutWatch()
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text("Launch Workout Live on start")
+                    Switch(watch, { watch = it; workoutPreferences.edit().putBoolean("mirror_watch", it).apply() })
+                }
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text("Sync detailed workouts")
+                    Switch(details, { details = it; workoutPreferences.edit().putBoolean("sync_activity_details", it).apply() })
+                }
+                Text("Detailed sync sends routes, charts, notes and sets to your dashboard. To add details to a previously synced workout, open it and tap Sync now.",
+                    style = MaterialTheme.typography.bodySmall)
             }
         }
         item { TrainerCheckInSettings(repo) }
