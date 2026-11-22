@@ -8,6 +8,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
@@ -24,6 +25,7 @@ internal fun WorkoutUploadDialog(repo: Repository, close: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val uri = LocalUriHandler.current
     val token = input.trim()
     val hub = config
     AlertDialog(
@@ -35,6 +37,9 @@ internal fun WorkoutUploadDialog(repo: Repository, close: () -> Unit) {
                     Text("Connect to your PebbleFit hub from the app’s setup screen to send workouts.")
                 } else {
                     Text("Create a history upload token in your PebbleFit web dashboard and paste it here.")
+                    Api.normalize(hub.baseUrl)?.let { url ->
+                        TextButton(onClick = { uri.openUri(url.toString()) }) { Text("Open PebbleFit web dashboard") }
+                    }
                     OutlinedTextField(input, { input = it.take(220) }, label = { Text("History upload token") },
                         singleLine = true, visualTransformation = PasswordVisualTransformation(), enabled = !busy)
                 }

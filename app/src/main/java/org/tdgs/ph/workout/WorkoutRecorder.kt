@@ -33,9 +33,13 @@ internal data class LiveWorkout(
     val bpm: Int? = null,
     val laps: Int = 0,
     val sets: Int = 0,
+    val livePace: Long? = null,
+    val mirrorWatch: Boolean = false,
 )
 
 internal class WorkoutRecorder : Service(), LocationListener {
+    private val watch by lazy { WorkoutWatch(this) }
+    private val paceFixes = ArrayDeque<Fix>()
     private val store by lazy { WorkoutStore.get(this) }
     private val location by lazy { getSystemService(LocationManager::class.java) }
     private val handler = Handler(Looper.getMainLooper())
@@ -66,12 +70,15 @@ internal class WorkoutRecorder : Service(), LocationListener {
                     getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification(state.workout.sport))
                 }
             }
-            live.value = state.copy(
+            val current = state.copy(
                 active = active,
+                livePace = if (state.paused) null else recentPace(paceFixes.toList(), active),
                 bpm = lastBpm.takeIf { runStart != null && SystemClock.elapsedRealtime() - lastPulseTime <= 5000 },
                 gpsStatus = if (wantsGps && runStart != null && state.gpsStatus == "GPS recording" &&
                     SystemClock.elapsedRealtime() - lastGpsTime > 15_000) "Waiting for GPS…" else state.gpsStatus,
             )
+            live.value = current
+            if (current.mirrorWatch && seconds % 2 == 1) watch.update(current)
             if (active >= MAX_ACTIVE_MS || SystemClock.elapsedRealtime() - sessionStart >= MAX_ACTIVE_MS) {
                 finish()
             } else {
@@ -86,7 +93,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         when (intent?.action) {
             START -> if (live.value == null) {
                 val sport = intent.getStringExtra("sport")?.let { Sport.valueOf(it) }
-                if (sport == null) stopSelf() else start(sport, intent.getBooleanExtra("gps", false), intent.getStringExtra("strap"))
+                if (sport == null) stopSelf() else start(sport, intent.getBooleanExtra("gps", false), intent.getStringExtra("strap"), intent.getBooleanExtra("mirror_watch", false))
             }
             PAUSE -> pause()
             RESUME -> resume()
@@ -112,7 +119,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         return START_NOT_STICKY
     }
 
-    private fun start(sport: Sport, gps: Boolean, address: String?) {
+    private fun start(sport: Sport, gps: Boolean, address: String?, mirrorWatch: Boolean) {
         wantsGps = gps && granted(Manifest.permission.ACCESS_FINE_LOCATION)
         val hasStrap = address != null && (Build.VERSION.SDK_INT < 31 || granted(Manifest.permission.BLUETOOTH_CONNECT))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -139,7 +146,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         if (!persist { store.start(workout) }) return
         error.value = null
         finished.value = null
-        live.value = LiveWorkout(workout, gpsStatus = if (gps && !wantsGps) "Precise location permission unavailable" else "")
+        live.value = LiveWorkout(workout, mirrorWatch = mirrorWatch, gpsStatus = if (gps && !wantsGps) "Precise location permission unavailable" else "")
         sessionWall = now
         sessionStart = SystemClock.elapsedRealtime()
         runStart = sessionStart
@@ -192,6 +199,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
         if (!persist { store.fix(state.workout.id, point) }) return
         segment = point.segment
         lastFix = point
+        paceFixes.addLast(point)
+        while (point.active - paceFixes.first().active > 20_000) paceFixes.removeFirst()
         val current = live.value ?: return
         acceptedFixes++
         var preview = current.route
@@ -217,12 +226,13 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private fun pause() {
         val state = live.value?.takeIf { !it.paused } ?: return
         accumulated = activeMs()
+        paceFixes.clear()
         runStart = null
         segment++
         lastBpm = null
         runCatching { location.removeUpdates(this) }
         if (persist { store.checkpoint(state.workout.id, wallTime(), accumulated) }) {
-            live.value = state.copy(active = accumulated, paused = true, bpm = null, gpsStatus = if (wantsGps) "GPS paused" else "")
+            live.value = state.copy(active = accumulated, paused = true, bpm = null, livePace = null, gpsStatus = if (wantsGps) "GPS paused" else "")
         }
     }
 
@@ -236,6 +246,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private fun finish() {
         val state = live.value ?: return
         if (persist { store.checkpoint(state.workout.id, wallTime(), activeMs(), finished = true) }) {
+            if (state.mirrorWatch) watch.update(state.copy(active = activeMs(), livePace = null), finished = true)
+            WorkoutUploadWorker.enqueue(this, state.workout.id)
             finished.value = state.workout.id
             shutdown()
         }

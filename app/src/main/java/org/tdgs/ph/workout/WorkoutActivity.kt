@@ -39,8 +39,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import org.tdgs.ph.PhApp
-import org.tdgs.ph.data.Api
 import org.tdgs.ph.data.Prefs
 import org.tdgs.ph.data.Repository
 import org.tdgs.ph.ui.Fmt
@@ -197,6 +198,7 @@ private fun Setup(visible: Boolean) {
     var gps by rememberSaveable { mutableStateOf(sport.gpsDefault) }
     var address by rememberSaveable { mutableStateOf(settings.getString("strap_address", null)) }
     var strapName by rememberSaveable { mutableStateOf(settings.getString("strap_name", null)) }
+    var mirrorWatch by rememberSaveable { mutableStateOf(settings.getBoolean("mirror_watch", false)) }
     var scanning by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
@@ -213,6 +215,7 @@ private fun Setup(visible: Boolean) {
                 putExtra("sport", sport.name)
                 putExtra("gps", gps)
                 putExtra("strap", address)
+                putExtra("mirror_watch", mirrorWatch)
             }
             starting = true
         } catch (_: RuntimeException) {
@@ -324,6 +327,17 @@ private fun Setup(visible: Boolean) {
                 settings.edit().putString("strap_address", strap.address).putString("strap_name", strap.label).apply()
             }) { Text(strap.label) }
         }
+        item {
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Live stats on Pebble", style = MaterialTheme.typography.titleMedium)
+                    Text("Open Workout Live on the watch. Requires Legacy PebbleKit in GravelEx.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(mirrorWatch, { mirrorWatch = it; settings.edit().putBoolean("mirror_watch", it).apply() })
+            InstallWorkoutWatch()
+            }
+        }
         if (scanning) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         message?.let { item { Text(it, color = MaterialTheme.colorScheme.secondary) } }
         item {
@@ -347,36 +361,54 @@ private fun Setup(visible: Boolean) {
     }
 }
 
+private fun livePaceLabel(value: Long, cycling: Boolean): String =
+    if (cycling) speed(value / 1000.0) else duration(value) + " /km"
+
 @Composable
 private fun Recording(state: LiveWorkout) {
     val context = LocalContext.current
     var finish by remember { mutableStateOf(false) }
     var addSet by remember { mutableStateOf(false) }
     val command = { action: String -> WorkoutRecorder.command(context, action) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item {
-            Text(if (state.paused) "Paused" else "Active time", color = MaterialTheme.colorScheme.primary)
-            Text(duration(state.active), fontSize = 54.sp, fontWeight = FontWeight.SemiBold, lineHeight = 60.sp)
-        }
-        item {
-            HorizontalDivider()
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp), Arrangement.SpaceBetween) {
-                if (state.gpsStatus.isNotEmpty()) Readout("Distance", distance(state.distance))
-                if (state.strapStatus.isNotEmpty()) Readout("Heart rate", state.bpm?.let { "$it bpm" } ?: "—")
-                if (state.workout.sport == Sport.strength) Readout("Sets", state.sets.toString())
-                Readout("Laps", state.laps.toString())
-            }
-        }
-        if (state.gpsStatus.isNotEmpty() || state.strapStatus.isNotEmpty()) {
+    Column(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (state.gpsStatus.isNotEmpty()) Text(state.gpsStatus)
-                    if (state.strapStatus.isNotEmpty()) Text(state.strapStatus)
+                Text(if (state.paused) "Paused" else "Active time", color = MaterialTheme.colorScheme.primary)
+                Text(duration(state.active), fontSize = 54.sp, fontWeight = FontWeight.SemiBold, lineHeight = 60.sp)
+            }
+            item {
+                HorizontalDivider()
+                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.weight(1f)) { Readout("Distance", if (state.gpsStatus.isNotEmpty()) distance(state.distance) else "—") }
+                        Box(Modifier.weight(1f)) { Readout("Heart rate", state.bpm?.let { "$it bpm" } ?: "—") }
+                    }
+                    if (state.gpsStatus.isNotEmpty()) Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
+                        val cycling = state.workout.sport == Sport.cycle
+                        Box(Modifier.weight(1f)) {
+                            Readout(if (cycling) "Live speed" else "Live pace", state.livePace?.let { livePaceLabel(it, cycling) } ?: "—")
+                        }
+                        Box(Modifier.weight(1f)) {
+                            val avg = if (state.distance >= 10 && state.active > 0) (state.active * 1000 / state.distance).toLong() else null
+                            Readout(if (cycling) "Avg speed" else "Avg pace", avg?.let { livePaceLabel(it, cycling) } ?: "—")
+                        }
+                    }
+                    Text(if (state.workout.sport == Sport.strength) "${state.sets} sets · ${state.laps} laps" else "${state.laps} laps",
+                        style = MaterialTheme.typography.bodySmall)
                 }
             }
+            if (state.gpsStatus.isNotEmpty() || state.strapStatus.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (state.gpsStatus.isNotEmpty()) Text(state.gpsStatus)
+                        if (state.strapStatus.isNotEmpty()) Text(state.strapStatus)
+                    }
+                }
+            }
+            if (state.route.isNotEmpty()) item { WorkoutMap(state.route, follow = true) }
         }
-        if (state.route.isNotEmpty()) item { RouteTrace(state.route) }
-        item {
+        HorizontalDivider()
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(modifier = Modifier.weight(1f), onClick = { command(if (state.paused) WorkoutRecorder.RESUME else WorkoutRecorder.PAUSE) }) {
                     Text(if (state.paused) "Resume" else "Pause")
@@ -469,11 +501,14 @@ private fun Review(
 ) {
     val uploadConfig by repo.settings.workoutUploadConfig.collectAsState(initial = null)
     val dashboard = repo.state.collectAsState().value.dashboard
-    var uploadSettings by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var version by remember { mutableIntStateOf(0) }
-    var busy by remember { mutableStateOf(false) }
+    val work by remember(context, id) {
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WorkoutUploadWorker.workName(id))
+    }.collectAsState(initial = emptyList())
+    val busy = work.any { !it.state.isFinished }
+    val uploadFailed = work.any { it.state == WorkInfo.State.FAILED }
     var delete by remember { mutableStateOf(false) }
     var effort by remember { mutableStateOf(false) }
     var editing by rememberSaveable(id) { mutableStateOf(false) }
@@ -513,6 +548,9 @@ private fun Review(
         ActivityTrainerReview(repo, workout.title ?: workout.sport.label, detail = detail, back = { showTrainerReview(false) })
         return
     }
+    LaunchedEffect(work) {
+        if (!workout.uploaded && work.any { it.state == WorkInfo.State.SUCCEEDED }) version++
+    }
     val uploaded = workout.uploaded || dashboard?.workouts?.any { it.id == "phone:${workout.id}" } == true
     val calories = dashboard?.let { data ->
         val workoutDay = Instant.ofEpochMilli(workout.start).atZone(Fmt.zone(data.tz)).toLocalDate().toString()
@@ -537,10 +575,12 @@ private fun Review(
                     Text("${workoutDate(workout.start)} · ${if (workout.manual) "${workout.sport.label} · Manual entry" else workout.sport.label}",
                         color = MaterialTheme.colorScheme.primary)
                     Text(workout.title ?: workout.sport.label, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+                    Text(if (uploaded) "Saved on this phone · Sent to PebbleFit" else "Saved on this phone",
+                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                     TextButton(enabled = !busy, onClick = { editing = true }) { Text("Edit activity") }
                     if (workout.interrupted) Text("Interrupted recording", color = MaterialTheme.colorScheme.secondary)
                 }
-                if (selected == "Overview" && detail.route.isNotEmpty()) item { RouteTrace(detail.route) }
+                if (selected == "Overview" && detail.route.isNotEmpty()) item { WorkoutMap(detail.route) }
                 if (selected == "Overview") item {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                         Readout("Active time", duration(workout.active))
@@ -626,36 +666,15 @@ private fun Review(
                             Text(workout.rpe?.let { "$it / 10" } ?: "Add effort")
                         }
                     }
-                    Button(modifier = Modifier.fillMaxWidth(), enabled = !busy && workout.active >= 1000, onClick = {
-                        if (uploadConfig == null) {
-                            uploadSettings = true
-                        } else {
-                            busy = true
-                            scope.launch {
-                                val message = try {
-                                    val config = repo.settings.currentWorkoutUpload() ?: throw IllegalStateException()
-                                    val payload = withContext(Dispatchers.Default) { detail.pebbleFitPayload() }
-                                    Api().uploadWorkout(config, payload)
-                                    withContext(Dispatchers.IO) { store.markUploaded(id) }
-                                    version++
-                                    repo.refresh()
-                                    "Workout sent to PebbleFit."
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (e: org.tdgs.ph.data.ApiException) {
-                                    e.message ?: "Could not send workout."
-                                } catch (_: Exception) {
-                                    "Could not send workout. Check your hub connection and upload token."
-                                } finally {
-                                    busy = false
-                                }
-                                snackbar.showSnackbar(message)
-                            }
-                        }
-                    }) { Text(if (busy) "Sending…" else "Send to PebbleFit") }
-                    Text("Shares workout totals and heart-rate summaries with PebbleFit. Names and notes stay on this phone.")
-                    if (uploadConfig != null) TextButton(enabled = !busy, onClick = { uploadSettings = true }) {
-                        Text("Workout upload settings")
+                    if (!uploaded) {
+                        Text(if (uploadConfig == null) "On this phone. Set up automatic uploads in Settings → Workout upload token."
+                            else if (busy) "Saved locally. PebbleFit upload queued."
+                            else if (uploadFailed) "Saved locally. Upload failed. Check the history token in Settings."
+                            else "Saved locally. PebbleFit uploads run in the background.")
+                        if (uploadConfig != null) TextButton(enabled = !busy && workout.active >= 1000, onClick = {
+                            WorkoutUploadWorker.enqueue(context, id)
+                            scope.launch { snackbar.showSnackbar("Workout queued for PebbleFit.") }
+                        }) { Text("Queue upload") }
                     }
                     if (detail.route.isNotEmpty()) {
                         OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
@@ -678,7 +697,6 @@ private fun Review(
             } else snackbar.showSnackbar("Could not update activity.")
         }
     }
-    if (uploadSettings) WorkoutUploadDialog(repo) { uploadSettings = false }
     if (delete) AlertDialog(
         onDismissRequest = { delete = false }, title = { Text("Delete workout from phone?") },
         text = { Text("The local recording, route and sensor samples will be removed.") },

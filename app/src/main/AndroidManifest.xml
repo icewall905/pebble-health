@@ -43,6 +43,12 @@
 
         <activity android:name=".planner.WorkoutPlannerActivity" android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+        <provider android:name=".workout.WorkoutWatchFiles"
+            android:authorities="${applicationId}.watchapps" android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/watchapp_files" />
+        </provider>
+
         <activity android:name=".workout.WorkoutActivity" android:exported="false" android:launchMode="singleTop" />
         <service android:name=".workout.WorkoutRecorder" android:exported="false"
             android:foregroundServiceType="location|connectedDevice|specialUse">

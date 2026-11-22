@@ -75,9 +75,24 @@ and GPX export are available offline.
 
 To send summaries to the hub, create a separate history upload token from the PebbleFit web
 dashboard with **Create upload token**, then enter it under **Settings → Workout upload token**.
-Choose **Send to PebbleFit** from a saved workout. The app sends elapsed and active time,
+New recordings upload automatically once a history upload token is configured. To send an older
+recording, open it and tap **Queue upload**. The app sends elapsed and active time,
 distance, effort, and heart-rate summaries to `POST /fitness/phone-workouts`. GPS coordinates
 and strength sets stay on the phone. The dashboard token remains read-only.
+
+### Live map and watch stats
+
+Tap **Show street map** during recording or review to use OpenStreetMap tiles for the
+visible area. Tile requests reveal the map viewport to OpenStreetMap. The recorded route
+and GPX remain local.
+
+In workout setup, tap **Install Workout Live on Pebble** and finish the installation in
+GravelEx. In GravelEx, enable **Legacy PebbleKit** and allow **Classic PebbleKit** for
+Workout Live if prompted. Open Workout Live on the watch and enable **Live stats on Pebble**
+when starting the phone workout. The watch receives active time, distance, live pace and
+heart rate from the recording phone. The bundled app targets Aplite, Basalt, Chalk, Diorite,
+and Emery. To rebuild it with the Pebble SDK, run `pebble build` in `watchapp/` and copy
+`watchapp/build/watchapp.pbw` to `app/src/main/assets/Workout-Live.pbw`.
 
 ## Troubleshooting
 

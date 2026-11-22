@@ -7,3 +7,5 @@ local.properties
 *.iml
 .kotlin/
 dist/
+
+/watchapp/.lock-waf*
