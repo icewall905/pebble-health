@@ -48,7 +48,7 @@ internal fun WorkoutMap(route: List<Fix>, follow: Boolean = false) {
     val context = LocalContext.current
     val uri = LocalUriHandler.current
     val prefs = remember { context.getSharedPreferences("workout_setup", 0) }
-    var enabled by remember { mutableStateOf(prefs.getBoolean("street_map", false)) }
+    var enabled by remember { mutableStateOf(prefs.getBoolean("street_map", true)) }
     if (!enabled) {
         FilledTonalButton(modifier = Modifier.fillMaxWidth(), onClick = {
             prefs.edit().putBoolean("street_map", true).apply()

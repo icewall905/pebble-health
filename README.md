@@ -84,9 +84,9 @@ lets you restore it later. **Delete from phone** removes the local recording its
 
 ### Live map and watch stats
 
-Tap **Show street map** during recording or review to use OpenStreetMap tiles for the
-visible area. Tile requests reveal the map viewport to OpenStreetMap. The recorded route
-and GPX remain local.
+GPS recordings show the OpenStreetMap street map by default during recording and review.
+Tap **Hide street map** to switch to the route preview and remember that choice. Tile requests
+reveal the map viewport to OpenStreetMap. The recorded route and GPX remain local.
 
 In workout setup, tap **Install Workout Live on Pebble** and finish the installation in
 GravelEx. In GravelEx, enable **Legacy PebbleKit** and allow **Classic PebbleKit** for
