@@ -20,6 +20,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.*
 import java.util.UUID
 
 internal data class LiveWorkout(
@@ -35,10 +36,13 @@ internal data class LiveWorkout(
     val sets: Int = 0,
     val livePace: Long? = null,
     val mirrorWatch: Boolean = false,
+    val watchStatus: String = "",
 )
 
 internal class WorkoutRecorder : Service(), LocationListener {
-    private val watch by lazy { WorkoutWatch(this) }
+    private var watch: WorkoutWatch? = null
+    private val watchScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var watchJob: Job? = null
     private val paceFixes = ArrayDeque<Fix>()
     private val store by lazy { WorkoutStore.get(this) }
     private val location by lazy { getSystemService(LocationManager::class.java) }
@@ -78,7 +82,17 @@ internal class WorkoutRecorder : Service(), LocationListener {
                     SystemClock.elapsedRealtime() - lastGpsTime > 15_000) "Waiting for GPS…" else state.gpsStatus,
             )
             live.value = current
-            if (current.mirrorWatch && seconds % 2 == 1) watch.update(current)
+            if (current.mirrorWatch && seconds % 2 == 1 && watchJob?.isActive != true) {
+                val connection = watch
+                if (connection != null) watchJob = watchScope.launch {
+                    val status = try { connection.update(current) }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { "Watch connection failed. Check Settings → Workouts." }
+                    live.value?.takeIf { it.workout.id == current.workout.id }?.let {
+                        live.value = it.copy(watchStatus = status)
+                    }
+                }
+            }
             if (active >= MAX_ACTIVE_MS || SystemClock.elapsedRealtime() - sessionStart >= MAX_ACTIVE_MS) {
                 finish()
             } else {
@@ -150,7 +164,15 @@ internal class WorkoutRecorder : Service(), LocationListener {
         sessionWall = now
         sessionStart = SystemClock.elapsedRealtime()
         runStart = sessionStart
-        if (mirrorWatch) watch.launch()
+        if (mirrorWatch) {
+            val connection = WorkoutWatch(this)
+            watch = connection
+            watchJob = watchScope.launch {
+                try { connection.launch() }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* The next data attempt reports connection status. */ }
+            }
+        }
         requestGps()
         if (hasStrap) {
             strap = ChestStrap(this, address, { status ->
@@ -213,12 +235,14 @@ internal class WorkoutRecorder : Service(), LocationListener {
         live.value = current.copy(distance = point.meters, route = preview)
     }
 
-    private fun recordPulse(bpm: Int) {
+    private fun recordPulse(measurement: HeartMeasurement) {
         val state = live.value ?: return
         if (state.paused) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastPulseTime < 500) return
-        if (!persist { store.pulse(state.workout.id, Pulse(activeMs(now), bpm, wallTime(now), segment)) }) return
+        if (now - lastPulseTime < 500 && measurement.rrTicks.isEmpty() && measurement.energyKj == null) return
+        val bpm = measurement.bpm
+        val sample = Pulse(activeMs(now), bpm, wallTime(now), segment, measurement.rrTicks, measurement.energyKj)
+        if (!persist { store.pulse(state.workout.id, sample) }) return
         lastPulseTime = now
         lastBpm = bpm
         live.value = state.copy(bpm = bpm)
@@ -247,7 +271,19 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private fun finish() {
         val state = live.value ?: return
         if (persist { store.checkpoint(state.workout.id, wallTime(), activeMs(), finished = true) }) {
-            if (state.mirrorWatch) watch.update(state.copy(active = activeMs(), livePace = null), finished = true)
+            val connection = watch
+            watch = null
+            val final = state.copy(active = activeMs(), livePace = null)
+            val previous = watchJob
+            watchJob = null
+            if (connection != null) CoroutineScope(Dispatchers.Main.immediate).launch {
+                try {
+                    previous?.cancelAndJoin()
+                    connection.update(final, finished = true)
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* A failed watch message does not affect the local save. */ }
+                finally { connection.close() }
+            }
             WorkoutUploadWorker.enqueue(this, state.workout.id)
             finished.value = state.workout.id
             shutdown()
@@ -265,6 +301,9 @@ internal class WorkoutRecorder : Service(), LocationListener {
     }
 
     private fun shutdown() {
+        watchJob?.cancel()
+        watch?.close()
+        watch = null
         handler.removeCallbacksAndMessages(null)
         runCatching { location.removeUpdates(this) }
         strap?.close()
@@ -277,6 +316,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
     override fun onDestroy() {
         live.value?.let { runCatching { store.recover() } }
         shutdown()
+        watchScope.cancel()
         super.onDestroy()
     }
 

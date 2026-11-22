@@ -21,7 +21,7 @@ internal class ChestStrap(
     context: Context,
     private val address: String,
     private val status: (String) -> Unit,
-    private val pulse: (Int) -> Unit,
+    private val pulse: (HeartMeasurement) -> Unit,
 ) : AutoCloseable {
     private val app = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -106,7 +106,7 @@ internal class ChestStrap(
 
         override fun onCharacteristicChanged(device: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             if (characteristic.uuid != bluetoothUuid("2a37")) return
-            decodeHeartRate(value)?.let { bpm -> current(device) { pulse(bpm) } }
+            decodeHeartMeasurement(value)?.let { measurement -> current(device) { pulse(measurement) } }
         }
 
         @Deprecated("Compatibility callback for Android 12 and earlier")

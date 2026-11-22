@@ -45,7 +45,9 @@ internal data class Fix(
     val accuracy: Float, val meters: Double,
 )
 
-internal data class Pulse(val active: Long, val bpm: Int, val time: Long, val segment: Int)
+internal data class Pulse(val active: Long, val bpm: Int, val time: Long, val segment: Int,
+    val rrTicks: List<Int> = emptyList(), val energyKj: Int? = null)
+internal data class HeartMeasurement(val bpm: Int, val rrTicks: List<Int>, val energyKj: Int?)
 internal data class Lap(val active: Long, val meters: Double)
 internal data class StrengthSet(val exercise: String, val reps: Int, val kg: Double?)
 internal data class WorkoutDetail(
@@ -58,7 +60,9 @@ internal data class WorkoutDetail(
     val distance get() = workout.manualDistance ?: route.lastOrNull()?.meters ?: 0.0
 }
 
-internal fun decodeHeartRate(bytes: ByteArray): Int? {
+internal fun decodeHeartRate(bytes: ByteArray): Int? = decodeHeartMeasurement(bytes)?.bpm
+
+internal fun decodeHeartMeasurement(bytes: ByteArray): HeartMeasurement? {
     val flags = bytes.firstOrNull()?.toInt() ?: return null
     // Bit 2 means contact detection is supported. Bit 1 then indicates contact.
     if (flags and 6 == 4 || bytes.size < 2) return null
@@ -67,7 +71,23 @@ internal fun decodeHeartRate(bytes: ByteArray): Int? {
         if (bytes.size < 3) return null
         low + ((bytes[2].toInt() and 255) shl 8)
     }
-    return bpm.takeIf { it in 1..300 }
+    if (bpm !in 1..300) return null
+    var offset = if (flags and 1 == 0) 2 else 3
+    fun word(index: Int) = (bytes[index].toInt() and 255) or ((bytes[index + 1].toInt() and 255) shl 8)
+    val energy = if (flags and 8 != 0 && offset + 1 < bytes.size) word(offset) else null
+    if (flags and 8 != 0) offset += 2
+    val intervals = if (flags and 16 == 0) emptyList() else
+        (offset until bytes.lastIndex step 2).map { word(it) }.filter { it > 0 }
+    return HeartMeasurement(bpm, intervals, energy)
+}
+
+internal fun WorkoutDetail.writeStrapCsv(out: Writer) {
+    out.write("received_at,active_ms,segment,bpm,rr_ticks_1024hz,energy_counter_kj\n")
+    heart.forEach { pulse ->
+        out.write("${Instant.ofEpochMilli(pulse.time)},${pulse.active},${pulse.segment},${pulse.bpm},")
+        out.write(pulse.rrTicks.joinToString(" "))
+        out.write(",${pulse.energyKj ?: ""}\n")
+    }
 }
 
 internal fun metersBetween(a: Fix, b: Fix): Double {

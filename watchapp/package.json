@@ -1,15 +1,38 @@
 {
   "name": "pebble-health-workout-live",
   "author": "Pebble Health",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "dependencies": {},
   "pebble": {
     "displayName": "Workout Live",
     "uuid": "23a97c1c-672f-4285-9b6c-5244cae8526e",
     "sdkVersion": "3",
-    "targetPlatforms": ["aplite", "basalt", "chalk", "diorite", "emery"],
-    "watchapp": {"watchface": false},
-    "resources": {"media": []}
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "resources": {
+      "media": []
+    },
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/icewall905/pebble-health",
+        "apps": [
+          {
+            "package": "org.tdgs.ph"
+          },
+          {
+            "package": "org.tdgs.ph.debug"
+          }
+        ]
+      }
+    }
   }
 }

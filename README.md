@@ -71,7 +71,9 @@ guide's timeline lists when each metric first appears.
 
 Open **Activities → Log workout**, choose a sport, and turn on phone GPS if you want a route.
 Wear your Bluetooth chest strap and tap **Find chest strap** to select it. Workout history
-and GPX export are available offline.
+and GPX export are available offline. If the strap includes beat-to-beat intervals or its
+energy counter in Bluetooth heart-rate notifications, those readings are saved with the
+workout. Use **Export strap CSV** in the workout details to export them.
 
 Workout summaries sync using your existing Pebble Health dashboard sign-in in the app.
 If you have only signed in through a browser, open **Settings → Dashboard sign-in** once.
@@ -88,11 +90,12 @@ GPS recordings show the OpenStreetMap street map by default during recording and
 Tap **Hide street map** to switch to the route preview and remember that choice. Tile requests
 reveal the map viewport to OpenStreetMap. The recorded route and GPX remain local.
 
-In Settings → Workouts, tap **Install Workout Live on Pebble** and finish the installation in
-GravelEx. In GravelEx, enable **Legacy PebbleKit** and allow **Classic PebbleKit** for
-Workout Live if prompted. Open Workout Live on the watch and enable **Live stats on Pebble**
-to open it automatically when starting the phone workout. The watch receives active time, distance, live pace and
-heart rate from the recording phone. The bundled app targets Aplite, Basalt, Chalk, Diorite,
+In **Settings → Workouts**, select the Pebble phone app that manages your watch. Tap
+**Install Workout Live on Pebble** to install the companion declaration used by PebbleKit 2.
+In GravelEx, enable **PebbleKit 2** under Watch App Permissions and allow Pebble Health if
+prompted. Enable **Launch Workout Live on start** in Pebble Health. The recording screen
+shows whether the watch is receiving stats. The watch receives active time, distance, live
+pace and heart rate from the recording phone. The bundled app targets Aplite, Basalt, Chalk, Diorite,
 and Emery. To rebuild it with the Pebble SDK, run `pebble build` in `watchapp/` and copy
 `watchapp/build/watchapp.pbw` to `app/src/main/assets/Workout-Live.pbw`.
 

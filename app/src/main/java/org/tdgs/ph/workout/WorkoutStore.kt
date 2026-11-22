@@ -8,7 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import java.io.File
 
 internal class WorkoutStore private constructor(context: Context) :
-    SQLiteOpenHelper(context, File(context.noBackupFilesDir, "workouts.db").absolutePath, null, 2) {
+    SQLiteOpenHelper(context, File(context.noBackupFilesDir, "workouts.db").absolutePath, null, 3) {
 
     override fun onConfigure(db: SQLiteDatabase) = db.setForeignKeyConstraintsEnabled(true)
 
@@ -20,7 +20,7 @@ internal class WorkoutStore private constructor(context: Context) :
         """.trimIndent())
         for ((table, columns) in mapOf(
             "fix" to "wall INTEGER, active INTEGER, segment INTEGER, lat REAL, lon REAL, alt REAL, accuracy REAL, meters REAL",
-            "pulse" to "active INTEGER, bpm INTEGER, wall INTEGER, segment INTEGER",
+            "pulse" to "active INTEGER, bpm INTEGER, wall INTEGER, segment INTEGER, rr TEXT, energy INTEGER",
             "lap" to "active INTEGER, meters REAL",
             "strength" to "exercise TEXT, reps INTEGER, kg REAL",
         )) {
@@ -36,6 +36,10 @@ internal class WorkoutStore private constructor(context: Context) :
             db.execSQL("ALTER TABLE workout ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE workout ADD COLUMN manual_distance REAL")
             db.execSQL("ALTER TABLE workout ADD COLUMN uploaded INTEGER NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE pulse ADD COLUMN rr TEXT")
+            db.execSQL("ALTER TABLE pulse ADD COLUMN energy INTEGER")
         }
     }
 
@@ -86,7 +90,7 @@ internal class WorkoutStore private constructor(context: Context) :
         "accuracy" to p.accuracy, "meters" to p.meters)
 
     fun pulse(id: String, p: Pulse) = insert("pulse", "workout" to id, "active" to p.active, "bpm" to p.bpm,
-        "wall" to p.time, "segment" to p.segment)
+        "wall" to p.time, "segment" to p.segment, "rr" to p.rrTicks.joinToString(" "), "energy" to p.energyKj)
     fun lap(id: String, p: Lap) = insert("lap", "workout" to id, "active" to p.active, "meters" to p.meters)
     fun set(id: String, set: StrengthSet) = insert("strength", "workout" to id,
         "exercise" to set.exercise, "reps" to set.reps, "kg" to set.kg)
@@ -122,8 +126,10 @@ internal class WorkoutStore private constructor(context: Context) :
             query("SELECT wall,active,segment,lat,lon,alt,accuracy,meters FROM fix WHERE workout=? ORDER BY row", args) {
                 Fix(getLong(0), getLong(1), getInt(2), getDouble(3), getDouble(4), doubleOrNull(5), getFloat(6), getDouble(7))
             },
-            query("SELECT active,bpm,wall,segment FROM pulse WHERE workout=? ORDER BY row", args) {
-                Pulse(getLong(0), getInt(1), getLong(2), getInt(3))
+            query("SELECT active,bpm,wall,segment,rr,energy FROM pulse WHERE workout=? ORDER BY row", args) {
+                Pulse(getLong(0), getInt(1), getLong(2), getInt(3),
+                    getString(4)?.split(' ')?.mapNotNull { it.toIntOrNull() }.orEmpty(),
+                    if (isNull(5)) null else getInt(5))
             },
             query("SELECT active,meters FROM lap WHERE workout=? ORDER BY row", args) { Lap(getLong(0), getDouble(1)) },
             query("SELECT exercise,reps,kg FROM strength WHERE workout=? ORDER BY row", args) {

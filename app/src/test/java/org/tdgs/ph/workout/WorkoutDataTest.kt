@@ -11,6 +11,14 @@ import kotlin.test.*
 
 class WorkoutDataTest {
     @Test
+    fun decodesOptionalEnergyAndAllCompleteRrIntervals() {
+        val sample = decodeHeartMeasurement(byteArrayOf(24, 120, 44, 1, 0, 4, 0, 3, 44))
+        assertEquals(120, sample?.bpm)
+        assertEquals(300, sample?.energyKj)
+        assertEquals(listOf(1024, 768), sample?.rrTicks)
+    }
+
+    @Test
     fun beatSaberCaloriesUseRecreationalBadmintonIntensityAndExcludePausedTime() {
         val workout = Workout("beat-saber", Sport.beat_saber, 0, 45 * 60_000L, 30 * 60_000L)
         assertFalse(workout.sport.gpsDefault)

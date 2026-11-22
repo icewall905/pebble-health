@@ -397,11 +397,12 @@ private fun Recording(state: LiveWorkout) {
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
-            if (state.gpsStatus.isNotEmpty() || state.strapStatus.isNotEmpty()) {
+            if (state.gpsStatus.isNotEmpty() || state.strapStatus.isNotEmpty() || state.watchStatus.isNotEmpty()) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (state.gpsStatus.isNotEmpty()) Text(state.gpsStatus)
                         if (state.strapStatus.isNotEmpty()) Text(state.strapStatus)
+                        if (state.watchStatus.isNotEmpty()) Text(state.watchStatus)
                     }
                 }
             }
@@ -538,6 +539,24 @@ private fun Review(
         }
     }
 
+    val exportStrap = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        if (uri != null) scope.launch {
+            val message = try {
+                withContext(Dispatchers.IO) {
+                    val recorded = store.detail(id) ?: error("Recording unavailable")
+                    val stream = context.contentResolver.openOutputStream(uri, "wt") ?: error("Document unavailable")
+                    stream.bufferedWriter(Charsets.UTF_8).use { recorded.writeStrapCsv(it) }
+                }
+                "Chest strap data saved"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                "Could not save chest strap data."
+            }
+            snackbar.showSnackbar(message)
+        }
+    }
+
     if (detail == null) {
         if (result == null) CircularProgressIndicator(Modifier.padding(20.dp))
         else Text("Could not open this workout.", Modifier.padding(20.dp))
@@ -620,6 +639,11 @@ private fun Review(
                         Readout("Average", "${series.averageBpm} bpm")
                         Readout("Peak", "${series.heart.maxOf { it.value }.toInt()} bpm")
                     }
+                }
+                if (selected == "Charts" && detail.heart.isNotEmpty()) item {
+                    val beats = remember(detail.heart) { detail.heart.sumOf { it.rrTicks.size } }
+                    if (beats > 0) Text("$beats beat-to-beat intervals recorded")
+                    OutlinedButton(onClick = { exportStrap.launch("chest-strap.csv") }) { Text("Export chest strap CSV") }
                 }
                 if (selected == "Charts" && series.heart.isNotEmpty()) item { HeartZones(detail.heart) }
                 if (selected == "Charts" && series.pace.isNotEmpty()) item {
