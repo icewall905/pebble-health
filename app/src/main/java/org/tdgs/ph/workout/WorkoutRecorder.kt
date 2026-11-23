@@ -33,6 +33,8 @@ internal data class LiveWorkout(
     val gpsStatus: String = "",
     val strapStatus: String = "",
     val bpm: Int? = null,
+    val heartFromWatch: Boolean = false,
+    val requestWatchHeart: Boolean = false,
     val laps: Int = 0,
     val sets: Int = 0,
     val exercise: String = "",
@@ -45,7 +47,7 @@ internal data class LiveWorkout(
     val maxBpm: Int = 0,
     val strapBattery: Int? = null,
 ) {
-    val watchToken: UInt get() = workout.id.hashCode().toUInt()
+    val watchToken: UInt get() = workout.id.hashCode().toUInt() and WATCH_SESSION_TOKEN_MASK
     val heartZone: Int? get() = bpm?.let { heartZone(it.toDouble(), maxBpm) }
 }
 
@@ -61,8 +63,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private var accumulated = 0L
     private var sessionStart = 0L
     private var sessionWall = 0L
-    private var lastPulseTime = 0L
-    private var lastBpm: Int? = null
+    private var strapPulse: TimedHeart? = null
+    private var watchPulse: TimedHeart? = null
     private var lastFix: Fix? = null
     private var lastGpsTime = 0L
     private var segment = 0
@@ -97,12 +99,11 @@ internal class WorkoutRecorder : Service(), LocationListener {
                     getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification(state.workout.sport))
                 }
             }
-            val current = state.copy(
+            val current = heartState(state, SystemClock.elapsedRealtime()).copy(
                 active = active,
                 restSeconds = restSeconds,
                 restComplete = state.restComplete || completedRest,
                 livePace = if (state.paused) null else recentPace(paceFixes.toList(), active),
-                bpm = lastBpm.takeIf { runStart != null && SystemClock.elapsedRealtime() - lastPulseTime <= 5000 },
                 gpsStatus = if (wantsGps && runStart != null && state.gpsStatus == "GPS recording" &&
                     SystemClock.elapsedRealtime() - lastGpsTime > 15_000) "Waiting for GPS…" else state.gpsStatus,
             )
@@ -142,6 +143,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
                 )
             }
             OPEN_WATCH -> launchWatch()
+            WATCH_HEART -> recordWatchPulse(intent.getIntExtra("bpm", 0))
             PAUSE -> pause()
             RESUME -> resume()
             LAP -> live.value?.takeIf { !it.paused }?.let { state ->
@@ -258,8 +260,11 @@ internal class WorkoutRecorder : Service(), LocationListener {
         requestGps()
         if (hasStrap) {
             strap = ChestStrap(this, address, { status ->
-                lastBpm = null
-                live.value?.let { live.value = it.copy(strapStatus = status, bpm = null, strapBattery = null) }
+                strapPulse = null
+                live.value?.let {
+                    live.value = heartState(it.copy(strapStatus = status, strapBattery = null),
+                        SystemClock.elapsedRealtime())
+                }
             }, ::recordPulse, battery = { level ->
                 live.value?.let { live.value = it.copy(strapBattery = level) }
             }).also { it.connect() }
@@ -335,17 +340,38 @@ internal class WorkoutRecorder : Service(), LocationListener {
         live.value = current.copy(distance = point.meters, route = preview)
     }
 
+    private fun heartState(state: LiveWorkout, now: Long): LiveWorkout {
+        val active = runStart != null
+        val selected = if (active) preferredHeart(now, strapPulse, watchPulse) else null
+        return state.copy(
+            bpm = selected?.bpm,
+            heartFromWatch = selected?.fromWatch == true,
+            requestWatchHeart = active && state.mirrorWatch && !strapIsFresh(now, strapPulse),
+        )
+    }
+
     private fun recordPulse(measurement: HeartMeasurement) {
         val state = live.value ?: return
         if (state.paused) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastPulseTime < 500 && measurement.rrTicks.isEmpty() && measurement.energyKj == null) return
-        val bpm = measurement.bpm
-        val sample = Pulse(activeMs(now), bpm, wallTime(now), segment, measurement.rrTicks, measurement.energyKj)
+        if (strapPulse?.let { now - it.time < 500 } == true &&
+            measurement.rrTicks.isEmpty() && measurement.energyKj == null) return
+        val sample = Pulse(activeMs(now), measurement.bpm, wallTime(now), segment,
+            measurement.rrTicks, measurement.energyKj)
         if (!persist { store.pulse(state.workout.id, sample) }) return
-        lastPulseTime = now
-        lastBpm = bpm
-        live.value = state.copy(bpm = bpm)
+        strapPulse = TimedHeart(measurement.bpm, now)
+        live.value = heartState(state, now)
+    }
+
+    private fun recordWatchPulse(bpm: Int) {
+        val state = live.value ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (state.paused || !state.mirrorWatch || bpm !in 25..250 || strapIsFresh(now, strapPulse) ||
+            watchPulse?.let { now - it.time < 2000 } == true) return
+        val sample = Pulse(activeMs(now), bpm, wallTime(now), segment, fromWatch = true)
+        if (!persist { store.pulse(state.workout.id, sample) }) return
+        watchPulse = TimedHeart(bpm, now, fromWatch = true)
+        live.value = heartState(state, now)
     }
 
     private fun pause() {
@@ -354,10 +380,11 @@ internal class WorkoutRecorder : Service(), LocationListener {
         paceFixes.clear()
         runStart = null
         segment++
-        lastBpm = null
+        strapPulse = null
+        watchPulse = null
         runCatching { location.removeUpdates(this) }
         if (persist { store.checkpoint(state.workout.id, wallTime(), accumulated) }) {
-            live.value = state.copy(active = accumulated, paused = true, bpm = null, livePace = null, gpsStatus = if (wantsGps) "GPS paused" else "")
+            live.value = state.copy(active = accumulated, paused = true, bpm = null, heartFromWatch = false, requestWatchHeart = false, livePace = null, gpsStatus = if (wantsGps) "GPS paused" else "")
         }
     }
 
@@ -479,6 +506,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         const val DISCARD = "discard"
         const val REPEAT_SET = "repeat_set"
         const val OPEN_WATCH = "open_watch"
+        const val WATCH_HEART = "watch_heart"
         const val PAUSE = "pause"
         const val RESUME = "resume"
         const val LAP = "lap"

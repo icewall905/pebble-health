@@ -9,6 +9,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import kotlin.math.roundToInt
 
+internal const val WATCH_SESSION_TOKEN_MASK = 0x7fffffffu
+internal const val WATCH_HEART_REQUEST = 0x80000000u
+
+internal data class TimedHeart(val bpm: Int, val time: Long, val fromWatch: Boolean = false)
+
+internal fun strapIsFresh(now: Long, strap: TimedHeart?): Boolean =
+    strap != null && now - strap.time in 0..5000
+
+internal fun preferredHeart(now: Long, strap: TimedHeart?, watch: TimedHeart?): TimedHeart? =
+    if (strapIsFresh(now, strap)) strap else watch?.takeIf { now - it.time in 0..12000 }
+
 /** Use recent movement within one GPS segment. A stale or sparse fix yields no live pace. */
 internal fun recentPace(route: List<Fix>, active: Long): Long? {
     val last = route.lastOrNull() ?: return null
@@ -39,7 +50,9 @@ internal fun workoutWatchData(state: LiveWorkout, finished: Boolean = false, dis
             }
         }
         put(8u, PebbleDictionaryItem.UInt32(mode.toUInt()))
-        put(12u, PebbleDictionaryItem.UInt32(state.watchToken))
+        // The high bit requests wrist measurements without growing the AppMessage dictionary.
+        val heartRequest = if (state.requestWatchHeart && !finished && !state.paused) WATCH_HEART_REQUEST else 0u
+        put(12u, PebbleDictionaryItem.UInt32(state.watchToken or heartRequest))
         if (mode == 1 || mode == 3) {
             put(9u, PebbleDictionaryItem.UInt32((if (mode == 1) state.sets else state.laps).toUInt()))
             val rest = if (finished) 0 else if (state.restComplete) 601 else state.restSeconds

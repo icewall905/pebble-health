@@ -60,6 +60,7 @@ internal fun watchSensorStatus(context: Context, state: LiveWorkout?): PebbleDic
     val prefs = context.getSharedPreferences("workout_setup", 0)
     val hasStrap = !prefs.getString("strap_address", null).isNullOrBlank()
     val strap = when {
+        state?.heartFromWatch == true -> 5
         state?.bpm != null -> 4
         state?.strapStatus == "Chest strap connected" -> 3
         !state?.strapStatus.isNullOrEmpty() -> 2

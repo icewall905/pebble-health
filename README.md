@@ -103,6 +103,14 @@ or strength rest and repeat-set, and finishing or discarding. Discard requires a
 second confirmation and deletes the unsaved recording. If Android blocks an
 unprepared start, check your phone for the start notification.
 
+### Watch heart rate during recording
+
+With watch mirroring enabled and Pebble Health Workout open on a watch with a
+heart-rate sensor, the phone uses wrist readings when the Bluetooth strap stops sending
+heart rate. It switches back as soon as strap readings resume. Wrist readings count
+toward the workout's heart-rate chart and zones. The chest strap CSV contains strap
+samples only.
+
 ### Browse from the watch
 
 On the home screen, **Up** opens **Live stats** with heart rate and phone GPS and chest

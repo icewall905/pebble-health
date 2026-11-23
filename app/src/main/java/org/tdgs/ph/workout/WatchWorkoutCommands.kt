@@ -78,7 +78,7 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
             requestOnPhone(this, sport)
             return ReceiveResult.Nack
         }
-        if (state == null || !state.mirrorWatch || data.number(22u) != state.watchToken) return ReceiveResult.Nack
+        if (state == null || !state.mirrorWatch || data.number(22u)?.and(WATCH_SESSION_TOKEN_MASK) != state.watchToken) return ReceiveResult.Nack
         val action = when (command) {
             2u -> WorkoutRecorder.PAUSE
             3u -> WorkoutRecorder.RESUME
@@ -86,12 +86,14 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
             5u -> WorkoutRecorder.REST.takeIf { !state.paused && state.workout.sport == Sport.strength }
             6u -> WorkoutRecorder.FINISH
             7u -> WorkoutRecorder.DISCARD
+            11u -> WorkoutRecorder.WATCH_HEART.takeIf { !state.paused && argument != null && argument in 25u..250u }
             8u -> WorkoutRecorder.REPEAT_SET.takeIf { !state.paused && state.lastSet != null }
             else -> null
         } ?: return ReceiveResult.Nack
         return if (runCatching {
             WorkoutRecorder.command(this, action) {
                 putExtra("watch_token", state.watchToken.toInt())
+                if (action == WorkoutRecorder.WATCH_HEART) putExtra("bpm", argument?.toInt() ?: 0)
                 if (action == WorkoutRecorder.REST) {
                     val rest = getSharedPreferences("strength_recording", 0).getInt("rest_seconds", 60)
                     putExtra("seconds", rest.takeIf { it in 30..90 } ?: 60)

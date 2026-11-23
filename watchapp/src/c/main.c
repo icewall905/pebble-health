@@ -13,6 +13,9 @@ static char title[32];
 static time_t received;
 static uint32_t token, menu_token, sequence;
 static bool has_token, sending, starting;
+static bool wrist_requested;
+#define HEART_REQUEST_BIT UINT32_C(0x80000000)
+#define SESSION_TOKEN_MASK UINT32_C(0x7fffffff)
 static unsigned pending_command;
 enum { HOME, SENSORS, WORKOUT, HISTORY, HISTORY_DETAIL };
 static unsigned page;
@@ -31,7 +34,7 @@ static SimpleMenuItem items[11];
 static unsigned actions[11];
 static SimpleMenuSection section;
 
-enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
+enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
 enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT };
 static const char *sports[] = {
   "Running", "Walking", "Hiking", "Cycling", "Strength",
@@ -75,6 +78,7 @@ static void send_command(unsigned command, unsigned argument) {
   dict_write_uint8(out, 21, argument);
   dict_write_uint32(out, 23, ++sequence);
   if (command >= PAUSE && command <= REPEAT_SET) dict_write_uint32(out, 22, menu_token);
+  if (command == WATCH_HEART) dict_write_uint32(out, 22, token);
   if (app_message_outbox_send() == APP_MSG_OK) {
     pending_command = command;
     sending = true;
@@ -84,6 +88,22 @@ static void send_command(unsigned command, unsigned argument) {
     show_notice("Could not reach phone");
   }
 }
+
+static void set_wrist_sampling(bool requested) {
+#if defined(PBL_HEALTH)
+  if (requested != wrist_requested) health_service_set_heart_rate_sample_period(requested ? 5 : 0);
+#endif
+  wrist_requested = requested;
+}
+
+#if defined(PBL_HEALTH)
+static void on_watch_heart(HealthEventType event, void *context) {
+  if (event != HealthEventHeartRateUpdate || !wrist_requested || !has_token || state != 0 ||
+      time(NULL) - received > 8 || sending) return;
+  HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateBPM);
+  if (bpm >= 25 && bpm <= 250) send_command(WATCH_HEART, bpm);
+}
+#endif
 
 static void populate_menu(unsigned type);
 
@@ -363,8 +383,9 @@ static void draw_strength(GContext *ctx, int w, int h, bool live,
     else snprintf(text, sizeof(text), "--");
     label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
     if (status) snprintf(text, sizeof(text), "%s", status);
-    else if (active_zone > 1) snprintf(text, sizeof(text), "bpm  /  Zone %u", active_zone - 1);
-    else if (active_zone == 1) snprintf(text, sizeof(text), "bpm  /  Below Z1");
+    else if (active_zone > 1) snprintf(text, sizeof(text), "%s  /  Zone %u", wrist_requested ? "Watch bpm" : "bpm", active_zone - 1);
+    else if (active_zone == 1) snprintf(text, sizeof(text), "%s  /  Below Z1", wrist_requested ? "Watch bpm" : "bpm");
+    else if (live && heart && wrist_requested) snprintf(text, sizeof(text), "Watch bpm");
     else snprintf(text, sizeof(text), "Heart rate");
     label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 57 / 100, w, 24));
   }
@@ -408,7 +429,7 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   unsigned strap = sensor_status & 15, gps = (sensor_status >> 4) & 15;
   unsigned recording = (sensor_status >> 8) & 15;
   unsigned battery_level = (sensor_status >> 16) & 255;
-  const char *strap_text[] = {"No strap selected", "Strap saved · idle", "Connecting strap…", "Strap connected", "Strap active"};
+  const char *strap_text[] = {"No strap selected", "Strap saved · idle", "Connecting strap…", "Strap connected", "Strap active", "Watch heart rate"};
   const char *gps_text[] = {"GPS off", "GPS ready", "Finding GPS…", "GPS fix", "GPS paused", "GPS unavailable"};
   char text[32];
 
@@ -419,12 +440,12 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 20 / 100, w, 48));
   graphics_context_set_text_color(ctx, GColorWhite);
   label(ctx, "bpm", FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 22));
-  if (linked && strap < 5) {
+  if (linked && strap < 6) {
     int inset = PBL_IF_ROUND_ELSE(w / 7, 10);
     int strap_top = h * 58 / 100, gps_top = h * 72 / 100;
     panel(ctx, GRect(inset, strap_top, w - 2 * inset, 22), strap >= 3);
     panel(ctx, GRect(inset, gps_top, w - 2 * inset, 22), gps == 3);
-    if (battery_level) snprintf(text, sizeof(text), "%s · %u%%", strap_text[strap], battery_level - 1);
+    if (battery_level && strap != 5) snprintf(text, sizeof(text), "%s · %u%%", strap_text[strap], battery_level - 1);
     else snprintf(text, sizeof(text), "%s", strap_text[strap]);
     label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, strap_top - 1, w, 23));
     if (gps < 6) label(ctx, gps_text[gps], FONT_KEY_GOTHIC_18_BOLD, GRect(0, gps_top - 1, w, 24));
@@ -542,8 +563,9 @@ static void draw(Layer *layer, GContext *ctx) {
   else snprintf(text, sizeof(text), "--");
   graphics_context_set_text_color(ctx, active ? zone_color(active - 1) : GColorWhite);
   label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 16 / 100, w, 50));
-  if (active > 1) snprintf(text, sizeof(text), "bpm  /  Zone %u", active - 1);
-  else if (active == 1) snprintf(text, sizeof(text), "bpm  /  Below Z1");
+  if (active > 1) snprintf(text, sizeof(text), "%s  /  Zone %u", wrist_requested ? "Watch bpm" : "bpm", active - 1);
+  else if (active == 1) snprintf(text, sizeof(text), "%s  /  Below Z1", wrist_requested ? "Watch bpm" : "bpm");
+  else if (live && heart && wrist_requested) snprintf(text, sizeof(text), "Watch bpm");
   else if (live && heart) snprintf(text, sizeof(text), "bpm  /  Set max HR");
   else snprintf(text, sizeof(text), "Heart rate");
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 43 / 100, w, 23));
@@ -618,7 +640,8 @@ static void inbox(DictionaryIterator *iter, void *context) {
   if (name && name->type == TUPLE_CSTRING) snprintf(title, sizeof(title), "%s", name->value->cstring);
   Tuple *session = dict_find(iter, TOKEN);
   has_token = session && session->type == TUPLE_UINT && session->length == 4;
-  if (has_token) token = session->value->uint32;
+  if (has_token) token = session->value->uint32 & SESSION_TOKEN_MASK;
+  set_wrist_sampling(has_token && state == 0 && (session->value->uint32 & HEART_REQUEST_BIT));
   if (starting || (first_update && page == HOME && state < 2)) {
     page = WORKOUT;
     starting = false;
@@ -638,6 +661,7 @@ static void inbox(DictionaryIterator *iter, void *context) {
 
 static void tick(struct tm *current_time, TimeUnits units) {
   const time_t clock = time(NULL);
+  if (wrist_requested && clock - received > 8) set_wrist_sampling(false);
   if (!sending && page == SENSORS && clock - sensor_request >= 8) {
     sensor_request = clock;
     send_command(REQUEST_SENSORS, 0);
@@ -676,11 +700,14 @@ int main(void) {
   tick_timer_service_subscribe(SECOND_UNIT, tick);
 #if defined(PBL_HEALTH)
   app_worker_message_subscribe(detection_message);
+  health_service_events_subscribe(on_watch_heart, NULL);
   if (launch_reason() == APP_LAUNCH_WORKER) offer_detection();
 #endif
   app_event_loop();
 #if defined(PBL_HEALTH)
   app_worker_message_unsubscribe();
+  set_wrist_sampling(false);
+  health_service_events_unsubscribe();
 #endif
   tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();

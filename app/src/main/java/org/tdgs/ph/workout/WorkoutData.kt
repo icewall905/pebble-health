@@ -46,7 +46,7 @@ internal data class Fix(
 )
 
 internal data class Pulse(val active: Long, val bpm: Int, val time: Long, val segment: Int,
-    val rrTicks: List<Int> = emptyList(), val energyKj: Int? = null)
+    val rrTicks: List<Int> = emptyList(), val energyKj: Int? = null, val fromWatch: Boolean = false)
 internal data class HeartMeasurement(val bpm: Int, val rrTicks: List<Int>, val energyKj: Int?)
 internal data class Lap(val active: Long, val meters: Double)
 internal data class StrengthSet(val exercise: String, val reps: Int, val kg: Double?)
@@ -83,7 +83,7 @@ internal fun decodeHeartMeasurement(bytes: ByteArray): HeartMeasurement? {
 
 internal fun WorkoutDetail.writeStrapCsv(out: Writer) {
     out.write("received_at,active_ms,segment,bpm,rr_ticks_1024hz,energy_counter_kj\n")
-    heart.forEach { pulse ->
+    heart.filterNot { it.fromWatch }.forEach { pulse ->
         out.write("${Instant.ofEpochMilli(pulse.time)},${pulse.active},${pulse.segment},${pulse.bpm},")
         out.write(pulse.rrTicks.joinToString(" "))
         out.write(",${pulse.energyKj ?: ""}\n")

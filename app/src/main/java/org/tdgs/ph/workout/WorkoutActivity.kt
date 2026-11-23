@@ -429,7 +429,7 @@ private fun Recording(state: LiveWorkout) {
                     Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
                         if (routeMode) Box(Modifier.weight(1f)) { Readout("Distance", distance(state.distance)) }
                         if (strength) Box(Modifier.weight(1f)) { Readout("Sets logged", state.sets.toString()) }
-                        Box(Modifier.weight(1f)) { Readout("Heart rate", state.bpm?.let { "$it bpm" } ?: "—") }
+                        Box(Modifier.weight(1f)) { Readout(if (state.heartFromWatch) "Watch heart rate" else "Heart rate", state.bpm?.let { "$it bpm" } ?: "—") }
                     }
                     state.heartZone?.let { zone ->
                         Readout("Heart-rate zone", if (zone == 0) "Below zone 1" else "Zone $zone")
@@ -672,7 +672,7 @@ private fun Review(
                         Readout("Peak", "${series.heart.maxOf { it.value }.toInt()} bpm")
                     }
                 }
-                if (selected == "Charts" && detail.heart.isNotEmpty()) item {
+                if (selected == "Charts" && detail.heart.any { !it.fromWatch }) item {
                     val beats = remember(detail.heart) { detail.heart.sumOf { it.rrTicks.size } }
                     if (beats > 0) Text("$beats beat-to-beat intervals recorded")
                     OutlinedButton(onClick = { exportStrap.launch("chest-strap.csv") }) { Text("Export chest strap CSV") }

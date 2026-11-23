@@ -48,6 +48,25 @@ class LiveStatsTest {
         assertEquals(-1, buffer.int)
     }
 
+    @Test
+    fun wristFillsMissingStrapSamplesUntilStrapReturns() {
+        val strap = TimedHeart(146, 1000)
+        val wrist = TimedHeart(135, 7000, fromWatch = true)
+        assertEquals(strap, preferredHeart(6000, strap, null))
+        assertEquals(wrist, preferredHeart(7000, strap, wrist))
+        val resumed = TimedHeart(141, 7100)
+        assertEquals(resumed, preferredHeart(7100, resumed, wrist))
+        assertNull(preferredHeart(19001, strap, wrist))
+    }
+
+    @Test
+    fun wristSamplingFlagKeepsSessionTokenAndStopsOnFinish() {
+        val state = LiveWorkout(Workout("run", Sport.run, 0, 0, 0), requestWatchHeart = true)
+        assertEquals(state.watchToken or WATCH_HEART_REQUEST, workoutWatchData(state)[12u]?.value)
+        assertEquals(state.watchToken, workoutWatchData(state, finished = true)[12u]?.value)
+        assertEquals(state.watchToken, workoutWatchData(state.copy(paused = true))[12u]?.value)
+    }
+
     private fun fix(time: Long, meters: Double, segment: Int = 0) =
         Fix(time, time, segment, 55.0, 12.0, null, 5f, meters)
 
