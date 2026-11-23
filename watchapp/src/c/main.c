@@ -100,7 +100,7 @@ static void set_wrist_sampling(bool requested) {
 static void on_watch_heart(HealthEventType event, void *context) {
   if (event != HealthEventHeartRateUpdate || !wrist_requested || !has_token || state != 0 ||
       time(NULL) - received > 8 || sending) return;
-  HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateBPM);
+  HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateRawBPM);
   if (bpm >= 25 && bpm <= 250) send_command(WATCH_HEART, bpm);
 }
 #endif
