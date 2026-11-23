@@ -103,6 +103,15 @@ or strength rest and repeat-set, and finishing or discarding. Discard requires a
 second confirmation and deletes the unsaved recording. If Android blocks an
 unprepared start, check your phone for the start notification.
 
+### Automatic walk and run prompts
+
+On a Pebble with Pebble Health enabled, open **Pebble Health Workout**, press **Select**,
+and choose **Auto-detect: Off** to turn on prompts. PebbleOS allows one background worker
+at a time, so the watch may ask you to replace the current one. After PebbleOS recognizes
+an ongoing walk or run, the watch opens a prompt to start a phone recording or dismiss it.
+Dismissal leaves the built-in activity logging and GravelEx sync alone. To start from the
+prompt while the phone is locked, use **Ready for watch start** as described above.
+
 ### Live map and watch stats
 
 GPS recordings show the OpenStreetMap street map by default during recording and review.

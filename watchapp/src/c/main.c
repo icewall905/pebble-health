@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/detection.h"
 
 enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART, MODE, COUNT, REST, TITLE, TOKEN };
 static Window *window;
@@ -16,17 +17,36 @@ static time_t notice_until;
 static const char *notice;
 static Window *options_window;
 static SimpleMenuLayer *options;
-static SimpleMenuItem items[10];
-static unsigned actions[10];
+static SimpleMenuItem items[11];
+static unsigned actions[11];
 static SimpleMenuSection section;
 
-enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, OPEN_FINISH, OPEN_DISCARD };
-enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD };
+enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
+enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT };
 static const char *sports[] = {
   "Running", "Walking", "Hiking", "Cycling", "Strength",
   "Tennis", "Rowing", "Yoga", "Beat Saber", "Other workout"
 };
 static unsigned menu_type;
+static void show_notice(const char *message);
+#if defined(PBL_HEALTH)
+static int detected_sport;
+static time_t last_detection_offer;
+static void offer_detection(void);
+
+static void toggle_detection(void) {
+  if (app_worker_is_running()) {
+    app_worker_kill();
+    show_notice("Stopping detection");
+  } else {
+    AppWorkerResult result = app_worker_launch();
+    if (result == APP_WORKER_RESULT_SUCCESS || result == APP_WORKER_RESULT_ALREADY_RUNNING)
+      show_notice("Auto-detect enabled");
+    else if (result != APP_WORKER_RESULT_ASKING_CONFIRMATION)
+      show_notice("Could not enable");
+  }
+}
+#endif
 
 static void show_notice(const char *message) {
   notice = message;
@@ -68,6 +88,17 @@ static void select_option(int index, void *context) {
     return;
   }
   window_stack_pop(true);
+#if defined(PBL_HEALTH)
+  if (action == TOGGLE_DETECTION) {
+    toggle_detection();
+    return;
+  }
+  if (menu_type == DETECTED_WORKOUT) {
+    if (action == START) send_command(START, detected_sport);
+    else if (launch_reason() == APP_LAUNCH_WORKER) window_stack_pop_all(true);
+    return;
+  }
+#endif
   if (action) send_command(action, menu_type == SPORTS ? index : 0);
 }
 
@@ -84,6 +115,9 @@ static void populate_menu(unsigned type) {
   if (type == SPORTS) {
     section.title = "Start on phone";
     for (unsigned i = 0; i < sizeof(sports) / sizeof(sports[0]); i++) add_option(sports[i], START);
+#if defined(PBL_HEALTH)
+    add_option(app_worker_is_running() ? "Auto-detect: On" : "Auto-detect: Off", TOGGLE_DETECTION);
+#endif
   } else if (type == CONTROLS) {
     section.title = "Workout controls";
     add_option(state == 1 ? "Resume" : "Pause", state == 1 ? RESUME : PAUSE);
@@ -97,6 +131,12 @@ static void populate_menu(unsigned type) {
     add_option("Save workout", SAVE);
     add_option("Discard...", OPEN_DISCARD);
     add_option("Keep recording", 0);
+#if defined(PBL_HEALTH)
+  } else if (type == DETECTED_WORKOUT) {
+    section.title = detected_sport == DETECT_RUN ? "Run detected" : "Walk detected";
+    add_option("Start on phone", START);
+    add_option("Dismiss", 0);
+#endif
   } else {
     section.title = "Delete recording?";
     add_option("Keep recording", 0);
@@ -110,6 +150,28 @@ static void populate_menu(unsigned type) {
       GColorWhite);
   layer_add_child(root, simple_menu_layer_get_layer(options));
 }
+
+#if defined(PBL_HEALTH)
+static void offer_detection(void) {
+  if (!app_worker_is_running() || starting ||
+      (received && state < 2 && time(NULL) - received <= 8)) return;
+  const time_t now = time(NULL);
+  const time_t offered = persist_read_int(DETECTION_OFFER_TIME_KEY);
+  if (!offered || offered == last_detection_offer || now < offered ||
+      now - offered >= DETECTION_OFFER_SECONDS) return;
+  const int sport = persist_read_int(DETECTION_SPORT_KEY);
+  if (sport != DETECT_RUN && sport != DETECT_WALK) return;
+  last_detection_offer = offered;
+  detected_sport = sport;
+  populate_menu(DETECTED_WORKOUT);
+  if (window_stack_get_top_window() != options_window) window_stack_push(options_window, true);
+  vibes_short_pulse();
+}
+
+static void detection_message(uint16_t type, AppWorkerMessage *message) {
+  if (type == DETECTION_OFFER) offer_detection();
+}
+#endif
 
 static void open_options(ClickRecognizerRef recognizer, void *context) {
   if (sending) return;
@@ -324,6 +386,14 @@ static void inbox(DictionaryIterator *iter, void *context) {
     notice_until = 0;
   }
   received = time(NULL);
+#if defined(PBL_HEALTH)
+  if (app_worker_is_running()) {
+    AppWorkerMessage message = { .data0 = state < 2 };
+    app_worker_send_message(DETECTION_PHONE_RECORDING, &message);
+  }
+  if (state < 2 && menu_type == DETECTED_WORKOUT &&
+      window_stack_get_top_window() == options_window) window_stack_pop(true);
+#endif
   layer_mark_dirty(display);
 }
 
@@ -351,7 +421,14 @@ int main(void) {
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(128, 48);
   tick_timer_service_subscribe(SECOND_UNIT, tick);
+#if defined(PBL_HEALTH)
+  app_worker_message_subscribe(detection_message);
+  if (launch_reason() == APP_LAUNCH_WORKER) offer_detection();
+#endif
   app_event_loop();
+#if defined(PBL_HEALTH)
+  app_worker_message_unsubscribe();
+#endif
   tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();
   if (options) simple_menu_layer_destroy(options);
