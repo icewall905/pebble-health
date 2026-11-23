@@ -78,7 +78,8 @@ internal class WorkoutActivity : ComponentActivity() {
             val prefs by repo.settings.prefs.collectAsState(initial = Prefs(8000, 8, "system"))
             PhTheme(prefs.theme) {
                 WorkoutScreen(repo, intent.getBooleanExtra("history", false),
-                    intent.getStringExtra("workout_id"), intent.getBooleanExtra("manual_entry", false), screenVisible, ::finish)
+                    intent.getStringExtra("workout_id"), intent.getBooleanExtra("manual_entry", false),
+                    Sport.entries.firstOrNull { it.name == intent.getStringExtra("watch_sport") }, screenVisible, ::finish)
             }
         }
     }
@@ -88,7 +89,7 @@ internal class WorkoutActivity : ComponentActivity() {
 }
 
 @Composable
-private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: String?, manualEntry: Boolean, visible: Boolean, close: () -> Unit) {
+private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: String?, manualEntry: Boolean, watchSport: Sport?, visible: Boolean, close: () -> Unit) {
     val context = LocalContext.current
     val live by WorkoutRecorder.live.collectAsState()
     val finished by WorkoutRecorder.finished.collectAsState()
@@ -163,7 +164,7 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
                     refresh++
                 }
                 history -> History(store, refresh) { detailId = it }
-                else -> Setup(visible)
+                else -> Setup(visible, watchSport)
             }
             if (adding && store != null) {
                 WorkoutLogEditor(null, saving, close = {
@@ -192,14 +193,14 @@ private data class StrapChoice(val label: String, val address: String)
 
 @SuppressLint("MissingPermission")
 @Composable
-private fun Setup(visible: Boolean) {
+private fun Setup(visible: Boolean, watchSport: Sport?) {
     val context = LocalContext.current
     val settings = remember { context.getSharedPreferences("workout_setup", 0) }
-    var sport by rememberSaveable { mutableStateOf(Sport.run) }
+    var sport by rememberSaveable { mutableStateOf(watchSport ?: Sport.run) }
     var gps by rememberSaveable { mutableStateOf(sport.gpsDefault) }
     var address by rememberSaveable { mutableStateOf(settings.getString("strap_address", null)) }
     var strapName by rememberSaveable { mutableStateOf(settings.getString("strap_name", null)) }
-    var mirrorWatch by rememberSaveable { mutableStateOf(settings.getBoolean("mirror_watch", false)) }
+    var mirrorWatch by rememberSaveable { mutableStateOf(watchSport != null || settings.getBoolean("mirror_watch", false)) }
     var maxBpm by remember { mutableIntStateOf(settings.getInt("max_bpm", 0)) }
     var editingMax by remember { mutableStateOf(false) }
     if (editingMax) MaxHeartRateDialog(maxBpm, { editingMax = false }) {
@@ -210,6 +211,7 @@ private fun Setup(visible: Boolean) {
     var scanning by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
+    val armed by WorkoutRecorder.armed.collectAsState()
     val found = remember { mutableStateMapOf<String, StrapChoice>() }
     val bluetoothPermissions = remember {
         if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
@@ -248,6 +250,16 @@ private fun Setup(visible: Boolean) {
                 message = "Allow Nearby devices for heart rate, or remove the selected strap."
             else -> start()
         }
+    }
+
+    fun armWatch() {
+        if (!visible) return
+        runCatching { WorkoutRecorder.command(context, WorkoutRecorder.ARM) }
+            .onFailure { message = "Could not prepare for a watch start." }
+    }
+    val armPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) armWatch()
+        else message = "Allow precise location to prepare for outdoor workouts from the watch."
     }
 
     LaunchedEffect(scanning, visible) {
@@ -350,6 +362,26 @@ private fun Setup(visible: Boolean) {
                 Text(if (maxBpm == 0) "Set max HR for zones" else "Max heart rate: $maxBpm bpm")
             }
         }
+        item {
+            OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = !starting, onClick = {
+                if (armed) WorkoutRecorder.command(context, WorkoutRecorder.DISARM)
+                else {
+                    val permissions = buildList {
+                        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
+                            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                            add(Manifest.permission.ACCESS_FINE_LOCATION)
+                        }
+                        if (Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) {
+                            add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
+                    if (permissions.isEmpty()) armWatch() else armPermission.launch(permissions.toTypedArray())
+                }
+            }) { Text(if (armed) "Stop waiting for watch" else "Ready for watch start") }
+            Text(if (armed) "Open Workout Live on your Pebble and pick a sport."
+                else "Prepare for a watch start before locking your phone. Waits up to one hour.",
+                style = MaterialTheme.typography.bodySmall)
+        }
         if (scanning) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         message?.let { item { Text(it, color = MaterialTheme.colorScheme.secondary) } }
         item {
@@ -380,6 +412,7 @@ private fun livePaceLabel(value: Long, cycling: Boolean): String =
 private fun Recording(state: LiveWorkout) {
     val context = LocalContext.current
     var finish by remember { mutableStateOf(false) }
+    var discard by remember { mutableStateOf(false) }
     val sport = state.workout.sport
     val strength = sport == Sport.strength
     val routeMode = state.gpsStatus.isNotEmpty() && !strength
@@ -448,9 +481,22 @@ private fun Recording(state: LiveWorkout) {
     }
     if (finish) AlertDialog(
         onDismissRequest = { finish = false }, title = { Text("Finish workout?") },
-        text = { Text("Save this recording to your workout history.") },
+        text = {
+            Column {
+                Text("Save this recording to your workout history.")
+                TextButton(onClick = { finish = false; discard = true }) { Text("Discard workout…") }
+            }
+        },
         confirmButton = { TextButton(onClick = { finish = false; command(WorkoutRecorder.FINISH) }) { Text("Finish and save") } },
         dismissButton = { TextButton(onClick = { finish = false }) { Text("Keep recording") } },
+    )
+    if (discard) AlertDialog(
+        onDismissRequest = { discard = false }, title = { Text("Discard workout?") },
+        text = { Text("This recording and its data will be deleted.") },
+        confirmButton = { TextButton(onClick = { discard = false; command(WorkoutRecorder.DISCARD) }) {
+            Text("Discard workout", color = MaterialTheme.colorScheme.error)
+        } },
+        dismissButton = { TextButton(onClick = { discard = false }) { Text("Keep recording") } },
     )
 }
 

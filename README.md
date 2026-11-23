@@ -93,6 +93,16 @@ Use **Set rest** to start a 30, 60 or 90 second break. Pebble Health shows when 
 complete and posts a phone alert if notifications are allowed. Workout Live shows the
 current exercise, sets logged and countdown alongside heart rate and zones.
 
+### Start from your watch
+
+On Android, open **Record workout** and tap **Ready for watch start** before locking
+your phone. This waits for one watch-started workout for up to an hour. It does not
+record a route before you select a sport. Open Workout Live, press **Select**, and
+choose a sport. During recording, **Select** opens controls for pause, resume, laps
+or strength rest and repeat-set, and finishing or discarding. Discard requires a
+second confirmation and deletes the unsaved recording. If Android blocks an
+unprepared start, check your phone for the start notification.
+
 ### Live map and watch stats
 
 GPS recordings show the OpenStreetMap street map by default during recording and review.

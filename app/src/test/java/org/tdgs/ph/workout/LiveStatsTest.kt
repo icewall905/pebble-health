@@ -22,6 +22,15 @@ class LiveStatsTest {
         assertEquals(0u, workoutWatchData(state, finished = true)[10u]?.value)
     }
 
+    @Test
+    fun watchCanDistinguishAnActiveSavedOrDiscardedRecording() {
+        val state = LiveWorkout(Workout("run", Sport.run, 0, 0, 0), gpsStatus = "GPS recording")
+        assertEquals(state.watchToken, workoutWatchData(state)[12u]?.value)
+        assertEquals(0u, workoutWatchData(state)[4u]?.value)
+        assertEquals(2u, workoutWatchData(state, finished = true)[4u]?.value)
+        assertEquals(3u, workoutWatchData(state, finished = true, discarded = true)[4u]?.value)
+    }
+
     private fun fix(time: Long, meters: Double, segment: Int = 0) =
         Fix(time, time, segment, 55.0, 12.0, null, 5f, meters)
 

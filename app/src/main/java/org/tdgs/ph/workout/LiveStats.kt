@@ -21,10 +21,10 @@ internal fun recentPace(route: List<Fix>, active: Long): Long? {
     return if (elapsed >= 5000 && meters >= 10) (elapsed * 1000 / meters).toLong() else null
 }
 
-internal fun workoutWatchData(state: LiveWorkout, finished: Boolean = false): Map<UInt, PebbleDictionaryItem> {
+internal fun workoutWatchData(state: LiveWorkout, finished: Boolean = false, discarded: Boolean = false): Map<UInt, PebbleDictionaryItem> {
     val values = listOf(state.active.div(1000).toInt(), state.distance.roundToInt(),
         state.livePace?.div(1000)?.toInt() ?: 0, state.bpm ?: 0,
-        if (finished) 2 else if (state.paused) 1 else 0,
+        if (discarded) 3 else if (finished) 2 else if (state.paused) 1 else 0,
         state.heartZone?.plus(1) ?: 0, state.strapBattery?.plus(1) ?: 0, state.maxBpm)
     val mode = when {
         state.workout.sport == Sport.strength -> 1
@@ -39,6 +39,7 @@ internal fun workoutWatchData(state: LiveWorkout, finished: Boolean = false): Ma
             }
         }
         put(8u, PebbleDictionaryItem.UInt32(mode.toUInt()))
+        put(12u, PebbleDictionaryItem.UInt32(state.watchToken))
         if (mode == 1 || mode == 3) {
             put(9u, PebbleDictionaryItem.UInt32((if (mode == 1) state.sets else state.laps).toUInt()))
             val rest = if (finished) 0 else if (state.restComplete) 601 else state.restSeconds
@@ -47,7 +48,7 @@ internal fun workoutWatchData(state: LiveWorkout, finished: Boolean = false): Ma
             // Keep the complete dictionary within the 128-byte inbox of installed watch apps.
             val watchTitle = title.take(32).dropLastWhile { it.isHighSurrogate() }
             val bounded = watchTitle.indices.lastOrNull { index ->
-                !watchTitle[index].isHighSurrogate() && watchTitle.substring(0, index + 1).encodeToByteArray().size <= 30
+                !watchTitle[index].isHighSurrogate() && watchTitle.substring(0, index + 1).encodeToByteArray().size <= 19
             }?.let { watchTitle.substring(0, it + 1) }.orEmpty()
             put(11u, PebbleDictionaryItem.Text(bounded))
         }
@@ -62,12 +63,12 @@ internal class WorkoutWatch(context: Context) : AutoCloseable {
     }
 
     suspend fun launch() {
-        withTimeoutOrNull(5000) { sender.startAppOnTheWatch(WATCH_UUID) }
+        withTimeoutOrNull(5000) { sender.startAppOnTheWatch(WORKOUT_WATCH_UUID) }
     }
 
-    suspend fun update(state: LiveWorkout, finished: Boolean = false): String {
-        val data = workoutWatchData(state, finished)
-        val results = withTimeoutOrNull(5000) { sender.sendDataToPebble(WATCH_UUID, data) }
+    suspend fun update(state: LiveWorkout, finished: Boolean = false, discarded: Boolean = false): String {
+        val data = workoutWatchData(state, finished, discarded)
+        val results = withTimeoutOrNull(5000) { sender.sendDataToPebble(WORKOUT_WATCH_UUID, data) }
         return when {
             results == null -> "Watch connection unavailable. Check Settings → Workouts."
             results.isEmpty() -> "No connected watch reported. Check PebbleKit 2 in your watch app."
@@ -82,7 +83,6 @@ internal class WorkoutWatch(context: Context) : AutoCloseable {
 
     override fun close() = sender.close()
 
-    companion object {
-        private val WATCH_UUID = UUID.fromString("23a97c1c-672f-4285-9b6c-5244cae8526e")
-    }
 }
+
+internal val WORKOUT_WATCH_UUID = UUID.fromString("23a97c1c-672f-4285-9b6c-5244cae8526e")

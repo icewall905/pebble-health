@@ -51,6 +51,11 @@
         </provider>
 
         <activity android:name=".workout.WorkoutActivity" android:exported="false" android:launchMode="singleTop" />
+        <service android:name=".workout.WatchWorkoutCommands" android:exported="true">
+            <intent-filter>
+                <action android:name="io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH" />
+            </intent-filter>
+        </service>
         <service android:name=".workout.WorkoutRecorder" android:exported="false"
             android:foregroundServiceType="location|connectedDevice|specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

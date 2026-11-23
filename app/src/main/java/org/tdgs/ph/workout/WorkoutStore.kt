@@ -115,6 +115,10 @@ internal class WorkoutStore private constructor(context: Context) :
         writableDatabase.update("workout", values, "id=? AND state!=0", arrayOf(id))
     }
 
+    fun discardRecording(id: String) {
+        writableDatabase.delete("workout", "id=? AND state=0", arrayOf(id))
+    }
+
     fun delete(id: String) { writableDatabase.delete("workout", "id=? AND state!=0", arrayOf(id)) }
 
     fun contains(id: String): Boolean = query("SELECT 1 FROM workout WHERE id=? AND state!=0",

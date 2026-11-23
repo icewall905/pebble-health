@@ -45,6 +45,7 @@ internal data class LiveWorkout(
     val maxBpm: Int = 0,
     val strapBattery: Int? = null,
 ) {
+    val watchToken: UInt get() = workout.id.hashCode().toUInt()
     val heartZone: Int? get() = bpm?.let { heartZone(it.toDouble(), maxBpm) }
 }
 
@@ -70,6 +71,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private var seconds = 0
     private var previewStride = 1
     private var acceptedFixes = 0
+    private val expireWatchStandby = Runnable { if (armed.value && live.value == null) shutdown() }
     private var restDeadline = 0L
     private val restWakeLock by lazy {
         getSystemService(PowerManager::class.java).newWakeLock(
@@ -127,10 +129,17 @@ internal class WorkoutRecorder : Service(), LocationListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.hasExtra("watch_token") == true &&
+            live.value?.watchToken != intent.getIntExtra("watch_token", 0).toUInt()) return START_NOT_STICKY
         when (intent?.action) {
+            ARM -> if (live.value == null && !armed.value) armForWatch()
+            DISARM -> if (live.value == null) shutdown()
             START -> if (live.value == null) {
                 val sport = intent.getStringExtra("sport")?.let { Sport.valueOf(it) }
-                if (sport == null) stopSelf() else start(sport, intent.getBooleanExtra("gps", false), intent.getStringExtra("strap"), intent.getBooleanExtra("mirror_watch", false))
+                if (sport == null) shutdown() else start(
+                    sport, intent.getBooleanExtra("gps", false), intent.getStringExtra("strap"),
+                    intent.getBooleanExtra("mirror_watch", false), intent.getBooleanExtra("from_watch", false)
+                )
             }
             OPEN_WATCH -> launchWatch()
             PAUSE -> pause()
@@ -169,33 +178,63 @@ internal class WorkoutRecorder : Service(), LocationListener {
                     live.value = state.copy(sets = state.sets + count, exercise = exercise, lastSet = set)
                 }
             }
+            REPEAT_SET -> live.value?.takeIf { !it.paused }?.let { state ->
+                state.lastSet?.let { set ->
+                    if (persist { store.sets(state.workout.id, set, 1) }) {
+                        live.value = state.copy(sets = state.sets + 1, exercise = set.exercise)
+                    }
+                }
+            }
             FINISH -> finish()
+            DISCARD -> finish(discard = true)
             else -> if (live.value == null) stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    private fun start(sport: Sport, gps: Boolean, address: String?, mirrorWatch: Boolean) {
-        wantsGps = gps && granted(Manifest.permission.ACCESS_FINE_LOCATION)
-        val hasStrap = address != null && (Build.VERSION.SDK_INT < 31 || granted(Manifest.permission.BLUETOOTH_CONNECT))
+    private fun armForWatch() {
+        val gps = granted(Manifest.permission.ACCESS_FINE_LOCATION)
+        val bluetooth = Build.VERSION.SDK_INT < 31 || granted(Manifest.permission.BLUETOOTH_CONNECT)
+        if (!promote(null, gps, bluetooth)) {
+            error.value = "Could not prepare for a watch start. Open Record workout and try again."
+            shutdown()
+            return
+        }
+        armed.value = true
+        handler.postDelayed(expireWatchStandby, 60 * 60 * 1000L)
+    }
+
+    private fun promote(sport: Sport?, gps: Boolean, bluetooth: Boolean): Boolean {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "Workout recording", NotificationManager.IMPORTANCE_LOW)
         )
-        try {
-            val types = (if (wantsGps) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0) or
-                (if (hasStrap) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0)
+        return try {
+            val types = (if (gps) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0) or
+                (if (bluetooth) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0)
+            val notification = notification(sport)
             if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIFICATION, notification(sport), if (types == 0) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else types)
-            } else if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(NOTIFICATION, notification(sport), types)
+                startForeground(NOTIFICATION, notification, if (types == 0) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else types)
             } else {
-                startForeground(NOTIFICATION, notification(sport))
+                startForeground(NOTIFICATION, notification, types)
             }
+            true
         } catch (_: RuntimeException) {
-            error.value = "Android could not start recording. Check the workout permissions and try again."
-            stopSelf()
+            false
+        }
+    }
+
+    private fun start(sport: Sport, gps: Boolean, address: String?, mirrorWatch: Boolean, fromWatch: Boolean) {
+        wantsGps = gps && granted(Manifest.permission.ACCESS_FINE_LOCATION)
+        val hasStrap = address != null && (Build.VERSION.SDK_INT < 31 || granted(Manifest.permission.BLUETOOTH_CONNECT))
+        if ((fromWatch && gps && !wantsGps) || (!armed.value && !promote(sport, wantsGps, hasStrap))) {
+            error.value = "Android could not start recording. Check workout permissions and try again."
+            if (fromWatch) WatchWorkoutCommands.requestOnPhone(this, sport)
+            shutdown()
             return
         }
+        armed.value = false
+        WatchWorkoutCommands.clearRequest(this)
+        handler.removeCallbacks(expireWatchStandby)
 
         val now = System.currentTimeMillis()
         val workout = Workout(UUID.randomUUID().toString(), sport, now, now, 0)
@@ -214,7 +253,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         runStart = sessionStart
         if (mirrorWatch) {
             watch = WorkoutWatch(this)
-            launchWatch()
+            if (!fromWatch) launchWatch()
         }
         requestGps()
         if (hasStrap) {
@@ -329,9 +368,12 @@ internal class WorkoutRecorder : Service(), LocationListener {
         requestGps()
     }
 
-    private fun finish() {
+    private fun finish(discard: Boolean = false) {
         val state = live.value ?: return
-        if (persist { store.checkpoint(state.workout.id, wallTime(), activeMs(), finished = true) }) {
+        if (persist {
+            if (discard) store.discardRecording(state.workout.id)
+            else store.checkpoint(state.workout.id, wallTime(), activeMs(), finished = true)
+        }) {
             val connection = watch
             watch = null
             val final = state.copy(active = activeMs(), livePace = null)
@@ -340,13 +382,17 @@ internal class WorkoutRecorder : Service(), LocationListener {
             if (connection != null) CoroutineScope(Dispatchers.Main.immediate).launch {
                 try {
                     previous?.cancelAndJoin()
-                    connection.update(final, finished = true)
+                    connection.update(final, finished = true, discarded = discard)
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* A failed watch message does not affect the local save. */ }
                 finally { connection.close() }
             }
-            WorkoutUploadWorker.enqueue(this, state.workout.id)
-            finished.value = state.workout.id
+            if (discard) {
+                error.value = "Workout discarded."
+            } else {
+                WorkoutUploadWorker.enqueue(this, state.workout.id)
+                finished.value = state.workout.id
+            }
             shutdown()
         }
     }
@@ -372,6 +418,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         strap?.close()
         strap = null
         live.value = null
+        armed.value = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -407,14 +454,18 @@ internal class WorkoutRecorder : Service(), LocationListener {
             .build())
     }
 
-    private fun notification(sport: Sport): Notification {
+    private fun notification(sport: Sport?): Notification {
         val open = Intent(this, WorkoutActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val pending = PendingIntent.getActivity(this, 0, open,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(sport.label)
-            .setContentText(if (live.value?.paused == true) "Workout paused" else "Workout recording")
+            .setContentTitle(sport?.label ?: "Ready for watch start")
+            .setContentText(when {
+                sport == null -> "Open Workout Live on your Pebble to start."
+                live.value?.paused == true -> "Workout paused"
+                else -> "Workout recording"
+            })
             .setContentIntent(pending)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
@@ -423,6 +474,10 @@ internal class WorkoutRecorder : Service(), LocationListener {
 
     companion object {
         const val START = "start"
+        const val ARM = "arm_watch"
+        const val DISARM = "disarm_watch"
+        const val DISCARD = "discard"
+        const val REPEAT_SET = "repeat_set"
         const val OPEN_WATCH = "open_watch"
         const val PAUSE = "pause"
         const val RESUME = "resume"
@@ -436,13 +491,14 @@ internal class WorkoutRecorder : Service(), LocationListener {
         private const val REST_NOTIFICATION = 0x3713
         private const val NOTIFICATION = 0x3712
         private const val MAX_ACTIVE_MS = 172_800_000L
+        val armed = MutableStateFlow(false)
         val live = MutableStateFlow<LiveWorkout?>(null)
         val finished = MutableStateFlow<String?>(null)
         val error = MutableStateFlow<String?>(null)
 
         fun command(context: Context, action: String, configure: Intent.() -> Unit = {}) {
             val intent = Intent(context, WorkoutRecorder::class.java).setAction(action).apply(configure)
-            if (action == START) context.startForegroundService(intent) else context.startService(intent)
+            if (action == START || action == ARM) context.startForegroundService(intent) else context.startService(intent)
         }
     }
 }

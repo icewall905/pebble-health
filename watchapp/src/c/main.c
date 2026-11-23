@@ -1,12 +1,143 @@
 #include <pebble.h>
 
-enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART, MODE, COUNT, REST, TITLE };
+enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART, MODE, COUNT, REST, TITLE, TOKEN };
 static Window *window;
 static Layer *display;
 static uint32_t elapsed, meters, pace, heart, state, zone, battery, max_heart;
 static uint32_t mode, count, rest;
 static char title[32];
 static time_t received;
+static uint32_t token, menu_token, sequence;
+static bool has_token, sending, starting;
+static time_t notice_until;
+static const char *notice;
+static Window *options_window;
+static SimpleMenuLayer *options;
+static SimpleMenuItem items[10];
+static unsigned actions[10];
+static SimpleMenuSection section;
+
+enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, OPEN_FINISH, OPEN_DISCARD };
+enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD };
+static const char *sports[] = {
+  "Running", "Walking", "Hiking", "Cycling", "Strength",
+  "Tennis", "Rowing", "Yoga", "Beat Saber", "Other workout"
+};
+static unsigned menu_type;
+
+static void show_notice(const char *message) {
+  notice = message;
+  notice_until = time(NULL) + 7;
+  layer_mark_dirty(display);
+}
+
+static void send_command(unsigned command, unsigned argument) {
+  if (sending) return;
+  DictionaryIterator *out;
+  if (app_message_outbox_begin(&out) != APP_MSG_OK) {
+    show_notice("Try again");
+    return;
+  }
+  dict_write_uint8(out, 20, command);
+  dict_write_uint8(out, 21, argument);
+  dict_write_uint32(out, 23, ++sequence);
+  if (command != START) dict_write_uint32(out, 22, menu_token);
+  if (app_message_outbox_send() == APP_MSG_OK) {
+    sending = true;
+    starting = command == START;
+    if (starting) show_notice("Starting on phone...");
+  } else {
+    show_notice("Could not reach phone");
+  }
+}
+
+static void populate_menu(unsigned type);
+
+static void show_submenu(void *type) {
+  populate_menu((unsigned)(uintptr_t)type);
+}
+
+static void select_option(int index, void *context) {
+  unsigned action = actions[index];
+  if (action == OPEN_FINISH || action == OPEN_DISCARD) {
+    const uintptr_t type = action == OPEN_FINISH ? END_WORKOUT : CONFIRM_DISCARD;
+    app_timer_register(1, show_submenu, (void *)type);
+    return;
+  }
+  window_stack_pop(true);
+  if (action) send_command(action, menu_type == SPORTS ? index : 0);
+}
+
+static void add_option(const char *title, unsigned action) {
+  actions[section.num_items] = action;
+  items[section.num_items++] = (SimpleMenuItem){ .title = title, .callback = select_option };
+}
+
+static void populate_menu(unsigned type) {
+  if (options) simple_menu_layer_destroy(options);
+  menu_type = type;
+  section.num_items = 0;
+  section.items = items;
+  if (type == SPORTS) {
+    section.title = "Start on phone";
+    for (unsigned i = 0; i < sizeof(sports) / sizeof(sports[0]); i++) add_option(sports[i], START);
+  } else if (type == CONTROLS) {
+    section.title = "Workout controls";
+    add_option(state == 1 ? "Resume" : "Pause", state == 1 ? RESUME : PAUSE);
+    if (state != 1) {
+      add_option(mode == 1 ? "Start set rest" : "Log lap", mode == 1 ? START_REST : LAP);
+      if (mode == 1 && count > 0) add_option("Repeat last set", REPEAT_SET);
+    }
+    add_option("Finish workout", OPEN_FINISH);
+  } else if (type == END_WORKOUT) {
+    section.title = "Finish workout?";
+    add_option("Save workout", SAVE);
+    add_option("Discard...", OPEN_DISCARD);
+    add_option("Keep recording", 0);
+  } else {
+    section.title = "Delete recording?";
+    add_option("Keep recording", 0);
+    add_option("Discard workout", DISCARD);
+  }
+  Layer *root = window_get_root_layer(options_window);
+  options = simple_menu_layer_create(layer_get_bounds(root), options_window, &section, 1, NULL);
+  MenuLayer *menu = simple_menu_layer_get_menu_layer(options);
+  menu_layer_set_highlight_colors(menu,
+      PBL_IF_COLOR_ELSE(type == CONFIRM_DISCARD ? GColorDarkCandyAppleRed : GColorMidnightGreen, GColorBlack),
+      GColorWhite);
+  layer_add_child(root, simple_menu_layer_get_layer(options));
+}
+
+static void open_options(ClickRecognizerRef recognizer, void *context) {
+  if (sending) return;
+  if (received && state < 2 && time(NULL) - received <= 8) {
+    if (!has_token) {
+      show_notice("Update Pebble Health");
+      return;
+    }
+    menu_token = token;
+    populate_menu(CONTROLS);
+  } else {
+    populate_menu(SPORTS);
+  }
+  window_stack_push(options_window, true);
+}
+
+static void click_config(void *context) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, open_options);
+}
+
+static void outbox_sent(DictionaryIterator *iter, void *context) {
+  sending = false;
+  if (starting) show_notice("Waiting for recording");
+}
+
+static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
+  sending = false;
+  show_notice(starting ? "Check phone to start" : "Command not delivered");
+  starting = false;
+}
+
 
 static void label(GContext *ctx, const char *text, const char *font, GRect bounds) {
   graphics_draw_text(ctx, text, fonts_get_system_font(font), bounds,
@@ -104,15 +235,19 @@ static void draw(Layer *layer, GContext *ctx) {
   bool live = !stale && state == 0;
   graphics_context_set_text_color(ctx, GColorWhite);
   char text[32];
+  if (notice && time(NULL) < notice_until) {
+    label(ctx, notice, FONT_KEY_GOTHIC_18_BOLD, GRect(w / 12, h * 38 / 100, w * 5 / 6, 28));
+    return;
+  }
   if (!received) {
     label(ctx, "Workout Live", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h / 4, w, 32));
-    graphics_draw_text(ctx, "Start a workout in Pebble Health.",
+    graphics_draw_text(ctx, "Press Select to start a workout.",
         fonts_get_system_font(FONT_KEY_GOTHIC_18), GRect(w / 7, h / 2, w * 5 / 7, h / 3),
         GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     return;
   }
 
-  const char *status = state == 2 ? "Finished" : stale ? "Signal lost" : state == 1 ? "Paused" : NULL;
+  const char *status = state == 3 ? "Discarded" : state == 2 ? "Finished" : stale ? "Signal lost" : state == 1 ? "Paused" : NULL;
   char time[16];
   if (elapsed >= 3600) snprintf(time, sizeof(time), "%lu:%02lu:%02lu",
       (unsigned long)(elapsed / 3600), (unsigned long)(elapsed / 60 % 60), (unsigned long)(elapsed % 60));
@@ -171,6 +306,13 @@ static void inbox(DictionaryIterator *iter, void *context) {
   Tuple *name = dict_find(iter, TITLE);
   title[0] = 0;
   if (name && name->type == TUPLE_CSTRING) snprintf(title, sizeof(title), "%s", name->value->cstring);
+  Tuple *session = dict_find(iter, TOKEN);
+  has_token = session && session->type == TUPLE_UINT && session->length == 4;
+  if (has_token) token = session->value->uint32;
+  if (starting) {
+    starting = false;
+    notice_until = 0;
+  }
   received = time(NULL);
   layer_mark_dirty(display);
 }
@@ -178,7 +320,13 @@ static void inbox(DictionaryIterator *iter, void *context) {
 static void tick(struct tm *time, TimeUnits units) { layer_mark_dirty(display); }
 
 int main(void) {
+  time_t now;
+  uint16_t millis;
+  time_ms(&now, &millis);
+  sequence = (uint32_t)now * 1000 + millis;
   window = window_create();
+  options_window = window_create();
+  window_set_click_config_provider(window, click_config);
   window_set_background_color(window, GColorBlack);
   Layer *root = window_get_root_layer(window);
   display = layer_create(layer_get_bounds(root));
@@ -186,11 +334,15 @@ int main(void) {
   layer_add_child(root, display);
   window_stack_push(window, false);
   app_message_register_inbox_received(inbox);
-  app_message_open(128, 32);
+  app_message_register_outbox_sent(outbox_sent);
+  app_message_register_outbox_failed(outbox_failed);
+  app_message_open(128, 48);
   tick_timer_service_subscribe(SECOND_UNIT, tick);
   app_event_loop();
   tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();
+  if (options) simple_menu_layer_destroy(options);
+  window_destroy(options_window);
   layer_destroy(display);
   window_destroy(window);
 }
