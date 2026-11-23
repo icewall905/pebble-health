@@ -267,6 +267,24 @@ static void label(GContext *ctx, const char *text, const char *font, GRect bound
       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
+static void panel(GContext *ctx, GRect box, bool emphasized) {
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(
+      emphasized ? GColorMidnightGreen : GColorOxfordBlue, GColorBlack));
+  graphics_fill_rect(ctx, box, 6, GCornersAll);
+#if !defined(PBL_COLOR)
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_draw_round_rect(ctx, box, 6);
+#endif
+}
+
+static void metric_card(GContext *ctx, GRect box, const char *name, const char *value) {
+  panel(ctx, box, false);
+  graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorVividCerulean, GColorWhite));
+  label(ctx, name, FONT_KEY_GOTHIC_14_BOLD, GRect(box.origin.x, box.origin.y - 1, box.size.w, 17));
+  graphics_context_set_text_color(ctx, GColorWhite);
+  label(ctx, value, FONT_KEY_GOTHIC_18_BOLD, GRect(box.origin.x, box.origin.y + 11, box.size.w, 22));
+}
+
 static GColor zone_color(unsigned index) {
 #if defined(PBL_COLOR)
   const GColor colors[] = { GColorLightGray, GColorVividCerulean, GColorMintGreen,
@@ -325,6 +343,8 @@ static void draw_strength(GContext *ctx, int w, int h, bool live,
 
   bool resting = live && rest > 0 && rest < 601;
   bool complete = live && rest == 601;
+  int panel_top = h * 28 / 100;
+  panel(ctx, GRect(inset, panel_top, w - 2 * inset, h * 68 / 100 - panel_top), resting || complete);
   if (resting || complete) {
     time_t age = time(NULL) - received;
     unsigned left = resting && age >= 0 && (uint32_t)age < rest ? rest - (uint32_t)age : 0;
@@ -400,10 +420,14 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   graphics_context_set_text_color(ctx, GColorWhite);
   label(ctx, "bpm", FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 22));
   if (linked && strap < 5) {
+    int inset = PBL_IF_ROUND_ELSE(w / 7, 10);
+    int strap_top = h * 58 / 100, gps_top = h * 72 / 100;
+    panel(ctx, GRect(inset, strap_top, w - 2 * inset, 22), strap >= 3);
+    panel(ctx, GRect(inset, gps_top, w - 2 * inset, 22), gps == 3);
     if (battery_level) snprintf(text, sizeof(text), "%s · %u%%", strap_text[strap], battery_level - 1);
     else snprintf(text, sizeof(text), "%s", strap_text[strap]);
-    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 59 / 100, w, 23));
-    if (gps < 6) label(ctx, gps_text[gps], FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 72 / 100, w, 24));
+    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, strap_top - 1, w, 23));
+    if (gps < 6) label(ctx, gps_text[gps], FONT_KEY_GOTHIC_18_BOLD, GRect(0, gps_top - 1, w, 24));
   } else {
     label(ctx, "Waiting for phone", FONT_KEY_GOTHIC_18, GRect(0, h * 63 / 100, w, 24));
   }
@@ -509,7 +533,10 @@ static void draw(Layer *layer, GContext *ctx) {
     return;
   }
   snprintf(text, sizeof(text), "%s%s%s", time, status ? "  " : "", status ? status : "");
-  label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 5 / 100, w, 23));
+  const int banner_top = h * 5 / 100;
+  panel(ctx, GRect(w / 8, banner_top, w * 3 / 4, 22), live);
+  graphics_context_set_text_color(ctx, live ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
+  label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, banner_top - 1, w, 23));
 
   if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
   else snprintf(text, sizeof(text), "--");
@@ -521,28 +548,28 @@ static void draw(Layer *layer, GContext *ctx) {
   else snprintf(text, sizeof(text), "Heart rate");
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 43 / 100, w, 23));
 
-  draw_gauge(ctx, w / 10, h * 59 / 100, w - 2 * (w / 10), active);
-  int left = PBL_IF_ROUND_ELSE(w / 10, 4);
-  int metric_width = w / 2 - left;
-  int metric_top = h * 76 / 100;
+  draw_gauge(ctx, w / 10, h * 56 / 100, w - 2 * (w / 10), active);
+  int left = PBL_IF_ROUND_ELSE(w / 8, 7);
+  int metric_width = w / 2 - left - 2;
+  int metric_top = h * 73 / 100;
+  int metric_height = h >= 200 ? 36 : 31;
   if (mode == 3) {
-    snprintf(text, sizeof(text), "%.15s  /  %lu %s", title[0] ? title : "Workout",
-        (unsigned long)count, count == 1 ? "lap" : "laps");
-    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(left, metric_top, w - 2 * left, 23));
+    snprintf(text, sizeof(text), "%lu %s", (unsigned long)count, count == 1 ? "lap" : "laps");
+    metric_card(ctx, GRect(left, metric_top, w - 2 * left, metric_height), title[0] ? title : "Workout", text);
     return;
   }
   snprintf(text, sizeof(text), "%lu.%02lu km", (unsigned long)(meters / 1000), (unsigned long)(meters % 1000 / 10));
-  label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(left, metric_top, metric_width, 23));
+  metric_card(ctx, GRect(left, metric_top, metric_width, metric_height), "Distance", text);
   if (mode == 2) {
     if (live && pace) snprintf(text, sizeof(text), "%lu km/h", (unsigned long)((3600 + pace / 2) / pace));
     else snprintf(text, sizeof(text), "-- km/h");
   } else if (live && pace) {
     snprintf(text, sizeof(text), "%lu:%02lu/km", (unsigned long)(pace / 60), (unsigned long)(pace % 60));
   } else snprintf(text, sizeof(text), "-- /km");
-  label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(w / 2, metric_top, metric_width, 23));
-  if (battery && !stale) {
+  metric_card(ctx, GRect(w / 2 + 2, metric_top, metric_width, metric_height), mode == 2 ? "Speed" : "Pace", text);
+  if (battery && !stale && h >= 200) {
     snprintf(text, sizeof(text), "Strap %lu%%", (unsigned long)(battery - 1));
-    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 88 / 100, w, 17));
+    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 90 / 100, w, 17));
   }
 }
 
