@@ -74,9 +74,9 @@ internal class WorkoutWatch(context: Context) : AutoCloseable {
             results.isEmpty() -> "No connected watch reported. Check PebbleKit 2 in your watch app."
             results.values.any { it == TransmissionResult.Success } -> "Live stats on Pebble"
             results.values.any { it == TransmissionResult.FailedNoPermissions } ->
-                "Reinstall Workout Live and allow Pebble Health in your watch companion."
+                "Reinstall Pebble Health Workout and allow Pebble Health in your watch companion."
             results.values.any { it == TransmissionResult.FailedDifferentAppOpen } ->
-                "Open Workout Live on your Pebble."
+                "Open Pebble Health Workout on your Pebble."
             else -> "Waiting for the watch to acknowledge live stats…"
         }
     }

@@ -79,7 +79,7 @@ fun SettingsScreen(repo: Repository) {
                 Text("Workouts", style = MaterialTheme.typography.titleMedium)
                 InstallWorkoutWatch()
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text("Launch Workout Live on start")
+                    Text("Launch Pebble Health Workout on start", Modifier.weight(1f))
                     Switch(watch, { watch = it; workoutPreferences.edit().putBoolean("mirror_watch", it).apply() })
                 }
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {

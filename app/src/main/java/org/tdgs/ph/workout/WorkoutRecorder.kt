@@ -244,7 +244,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         live.value = LiveWorkout(
             workout,
             mirrorWatch = mirrorWatch,
-            watchStatus = if (mirrorWatch) "Opening Workout Live on Pebble…" else "",
+            watchStatus = if (mirrorWatch) "Opening Pebble Health Workout on Pebble…" else "",
             maxBpm = getSharedPreferences("workout_setup", 0).getInt("max_bpm", 0),
             gpsStatus = if (gps && !wantsGps) "Precise location permission unavailable" else "",
         )
@@ -269,7 +269,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
 
     private fun launchWatch() {
         val connection = watch ?: return
-        live.value?.let { live.value = it.copy(watchStatus = "Opening Workout Live on Pebble…") }
+        live.value?.let { live.value = it.copy(watchStatus = "Opening Pebble Health Workout on Pebble…") }
         val previous = watchJob
         watchJob = watchScope.launch {
             try {
@@ -462,7 +462,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(sport?.label ?: "Ready for watch start")
             .setContentText(when {
-                sport == null -> "Open Workout Live on your Pebble to start."
+                sport == null -> "Open Pebble Health Workout on your Pebble to start."
                 live.value?.paused == true -> "Workout paused"
                 else -> "Workout recording"
             })

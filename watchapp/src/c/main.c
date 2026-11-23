@@ -3,6 +3,9 @@
 enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART, MODE, COUNT, REST, TITLE, TOKEN };
 static Window *window;
 static Layer *display;
+#if defined(PBL_COLOR)
+static GBitmap *workout_mark;
+#endif
 static uint32_t elapsed, meters, pace, heart, state, zone, battery, max_heart;
 static uint32_t mode, count, rest;
 static char title[32];
@@ -240,7 +243,14 @@ static void draw(Layer *layer, GContext *ctx) {
     return;
   }
   if (!received) {
-    label(ctx, "Workout Live", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h / 4, w, 32));
+#if defined(PBL_COLOR)
+    if (workout_mark) {
+      graphics_context_set_compositing_mode(ctx, GCompOpSet);
+      graphics_draw_bitmap_in_rect(ctx, workout_mark, GRect((w - 25) / 2, 5, 25, 25));
+    }
+#endif
+    label(ctx, "Pebble Health", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h / 6, w, 34));
+    label(ctx, "Workout", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h / 6 + 26, w, 34));
     graphics_draw_text(ctx, "Press Select to start a workout.",
         fonts_get_system_font(FONT_KEY_GOTHIC_18), GRect(w / 7, h / 2, w * 5 / 7, h / 3),
         GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
@@ -324,6 +334,9 @@ int main(void) {
   uint16_t millis;
   time_ms(&now, &millis);
   sequence = (uint32_t)now * 1000 + millis;
+#if defined(PBL_COLOR)
+  workout_mark = gbitmap_create_with_resource(RESOURCE_ID_WORKOUT_MARK);
+#endif
   window = window_create();
   options_window = window_create();
   window_set_click_config_provider(window, click_config);
@@ -345,4 +358,7 @@ int main(void) {
   window_destroy(options_window);
   layer_destroy(display);
   window_destroy(window);
+#if defined(PBL_COLOR)
+  if (workout_mark) gbitmap_destroy(workout_mark);
+#endif
 }

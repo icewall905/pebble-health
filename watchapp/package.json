@@ -1,11 +1,11 @@
 {
-  "name": "pebble-health-workout-live",
+  "name": "pebble-health-workout",
   "author": "Pebble Health",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "Workout Live",
+    "displayName": "Pebble Health Workout",
     "uuid": "23a97c1c-672f-4285-9b6c-5244cae8526e",
     "sdkVersion": "3",
     "targetPlatforms": [
@@ -19,7 +19,25 @@
       "watchface": false
     },
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "MENU_ICON",
+          "file": "images/workout-menu.png",
+          "memoryFormat": "1Bit",
+          "menuIcon": true
+        },
+        {
+          "type": "bitmap",
+          "name": "WORKOUT_MARK",
+          "file": "images/workout-color.png",
+          "targetPlatforms": [
+            "basalt",
+            "chalk",
+            "emery"
+          ]
+        }
+      ]
     },
     "companionApp": {
       "android": {

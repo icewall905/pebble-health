@@ -120,7 +120,7 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
             manager.notify(NOTIFICATION, Notification.Builder(context, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("Start ${sport.label.lowercase()}")
-                .setContentText("Requested from Workout Live on your Pebble.")
+                .setContentText("Requested from Pebble Health Workout on your Pebble.")
                 .setContentIntent(open)
                 .setTimeoutAfter(120_000L)
                 .setAutoCancel(true)

@@ -90,14 +90,14 @@ Choose **Strength** to search or enter an exercise, pin up to five favorites, an
 the set-count and weight shortcuts. Check the reps per set before logging. Multiple
 identical sets can be recorded together, or logged one by one as you finish them.
 Use **Set rest** to start a 30, 60 or 90 second break. Pebble Health shows when rest is
-complete and posts a phone alert if notifications are allowed. Workout Live shows the
+complete and posts a phone alert if notifications are allowed. Pebble Health Workout shows the
 current exercise, sets logged and countdown alongside heart rate and zones.
 
 ### Start from your watch
 
 On Android, open **Record workout** and tap **Ready for watch start** before locking
 your phone. This waits for one watch-started workout for up to an hour. It does not
-record a route before you select a sport. Open Workout Live, press **Select**, and
+record a route before you select a sport. Open Pebble Health Workout, press **Select**, and
 choose a sport. During recording, **Select** opens controls for pause, resume, laps
 or strength rest and repeat-set, and finishing or discarding. Discard requires a
 second confirmation and deletes the unsaved recording. If Android blocks an
@@ -110,17 +110,17 @@ Tap **Hide street map** to switch to the route preview and remember that choice.
 reveal the map viewport to OpenStreetMap. The recorded route and GPX remain local.
 
 In **Settings → Workouts**, select the Pebble phone app that manages your watch. Tap
-**Install Workout Live on Pebble** to install the companion declaration used by PebbleKit 2.
+**Install Pebble Health Workout on Pebble** to install the companion declaration used by PebbleKit 2.
 In GravelEx, enable **PebbleKit 2** under Watch App Permissions and allow Pebble Health if
-prompted. Enable **Launch Workout Live on start** in Pebble Health. The recording screen
+prompted. Enable **Launch Pebble Health Workout on start** in Pebble Health. The recording screen
 shows whether the watch is receiving stats. The watch receives active time, distance, live
 pace and heart rate from the recording phone. Use **Set max HR for zones** before recording
-to show your current zone on the phone and watch. Workout Live fills your active zone
+to show your current zone on the phone and watch. Pebble Health Workout fills your active zone
 and marks your position within it. Strap battery appears when the sensor
-exposes a readable Bluetooth Battery Level. Use **Open Workout Live** on the recording
+exposes a readable Bluetooth Battery Level. Use **Open Pebble Health Workout** on the recording
 screen to retry launching it. The bundled app targets Aplite, Basalt, Chalk, Diorite,
 and Emery. To rebuild it with the Pebble SDK, run `pebble build` in `watchapp/` and copy
-`watchapp/build/watchapp.pbw` to `app/src/main/assets/Workout-Live.pbw`.
+`watchapp/build/watchapp.pbw` to `app/src/main/assets/Pebble-Health-Workout.pbw`.
 
 ## Troubleshooting
 

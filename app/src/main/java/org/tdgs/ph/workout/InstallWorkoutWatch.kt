@@ -41,7 +41,7 @@ internal fun InstallWorkoutWatch() {
             val intent = withContext(Dispatchers.IO) {
                 runCatching {
                     val directory = File(context.cacheDir, "watchapps").apply { mkdirs() }
-                    val file = File(directory, "Workout-Live.pbw")
+                    val file = File(directory, "Pebble-Health-Workout.pbw")
                     context.assets.open(file.name).use { input -> file.outputStream().use { input.copyTo(it) } }
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.watchapps", file)
                     Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/octet-stream")
@@ -52,5 +52,5 @@ internal fun InstallWorkoutWatch() {
                 Toast.makeText(context, "Could not open the watch app in the selected Pebble app.", Toast.LENGTH_LONG).show()
             }
         }
-    }) { Text("Install Workout Live on Pebble") }
+    }) { Text("Install Pebble Health Workout on Pebble") }
 }

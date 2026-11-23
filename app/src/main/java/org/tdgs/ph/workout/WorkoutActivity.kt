@@ -351,7 +351,7 @@ private fun Setup(visible: Boolean, watchSport: Sport?) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Live stats on Pebble", style = MaterialTheme.typography.titleMedium)
-                    Text("Opens Workout Live on the watch when you start. Install it from Pebble Health Settings.",
+                    Text("Opens Pebble Health Workout on the watch when you start. Install it from Pebble Health Settings.",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(mirrorWatch, { mirrorWatch = it; settings.edit().putBoolean("mirror_watch", it).apply() })
@@ -378,7 +378,7 @@ private fun Setup(visible: Boolean, watchSport: Sport?) {
                     if (permissions.isEmpty()) armWatch() else armPermission.launch(permissions.toTypedArray())
                 }
             }) { Text(if (armed) "Stop waiting for watch" else "Ready for watch start") }
-            Text(if (armed) "Open Workout Live on your Pebble and pick a sport."
+            Text(if (armed) "Open Pebble Health Workout on your Pebble and pick a sport."
                 else "Prepare for a watch start before locking your phone. Waits up to one hour.",
                 style = MaterialTheme.typography.bodySmall)
         }
@@ -459,7 +459,7 @@ private fun Recording(state: LiveWorkout) {
                         state.strapBattery?.let { Text("Chest strap battery: $it%") }
                         if (state.watchStatus.isNotEmpty()) Text(state.watchStatus)
                         if (state.mirrorWatch && state.watchStatus != "Live stats on Pebble") {
-                            TextButton(onClick = { command(WorkoutRecorder.OPEN_WATCH) }) { Text("Open Workout Live") }
+                            TextButton(onClick = { command(WorkoutRecorder.OPEN_WATCH) }) { Text("Open Pebble Health Workout") }
                         }
                     }
                 }
