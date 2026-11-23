@@ -114,7 +114,9 @@ samples only.
 ### Browse from the watch
 
 On the home screen, **Up** opens **Live stats** with heart rate and phone GPS and chest
-strap status. During a recording, press **Up** again for the workout display.
+strap status. It also reads the wrist sensor on a compatible watch while the screen
+is open, even before a workout or when the phone is out of range. During a recording,
+press **Up** again for the workout display.
 **Down** opens the eight most recent phone and synced dashboard activities. Scroll with
 **Up** and **Down**, and use **Select** to see an entry's details. The last fetched list
 is available on the watch if your phone is out of range. From home, **Select** opens

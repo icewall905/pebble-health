@@ -13,7 +13,9 @@ static char title[32];
 static time_t received;
 static uint32_t token, menu_token, sequence;
 static bool has_token, sending, starting;
-static bool wrist_requested;
+static bool wrist_requested, wrist_sampling, wrist_sampling_wanted;
+static time_t wrist_received;
+static unsigned wrist_bpm;
 #define HEART_REQUEST_BIT UINT32_C(0x80000000)
 #define SESSION_TOKEN_MASK UINT32_C(0x7fffffff)
 static unsigned pending_command;
@@ -89,19 +91,38 @@ static void send_command(unsigned command, unsigned argument) {
   }
 }
 
-static void set_wrist_sampling(bool requested) {
+static bool phone_has_live_heart(time_t now) {
+  return (received && now - received <= 8 && state == 0 && heart) ||
+      (sensor_received && now - sensor_received <= 12 && sensor_bpm);
+}
+
+static void set_wrist_sampling(bool wanted) {
+  if (wanted == wrist_sampling_wanted) return;
+  wrist_sampling_wanted = wanted;
 #if defined(PBL_HEALTH)
-  if (requested != wrist_requested) health_service_set_heart_rate_sample_period(requested ? 5 : 0);
+  wrist_sampling = health_service_set_heart_rate_sample_period(wanted ? 5 : 0) && wanted;
 #endif
-  wrist_requested = requested;
+  if (!wanted) {
+    wrist_bpm = 0;
+    wrist_received = 0;
+  }
+}
+
+static void update_wrist_sampling(time_t now) {
+  if (wrist_requested && now - received > 8) wrist_requested = false;
+  set_wrist_sampling(wrist_requested || (page == SENSORS && !phone_has_live_heart(now)));
 }
 
 #if defined(PBL_HEALTH)
 static void on_watch_heart(HealthEventType event, void *context) {
-  if (event != HealthEventHeartRateUpdate || !wrist_requested || !has_token || state != 0 ||
-      time(NULL) - received > 8 || sending) return;
-  HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateRawBPM);
-  if (bpm >= 25 && bpm <= 250) send_command(WATCH_HEART, bpm);
+  if (event != HealthEventHeartRateUpdate || !wrist_sampling) return;
+  const HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateRawBPM);
+  const time_t now = time(NULL);
+  wrist_bpm = bpm >= 25 && bpm <= 250 ? bpm : 0;
+  wrist_received = now;
+  layer_mark_dirty(display);
+  if (wrist_bpm && wrist_requested && has_token && state == 0 && now - received <= 8 && !sending)
+    send_command(WATCH_HEART, wrist_bpm);
 }
 #endif
 
@@ -425,7 +446,9 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   const time_t now = time(NULL);
   bool linked = sensor_received && now - sensor_received <= 20;
   bool fresh = received && now - received <= 8 && state == 0;
-  unsigned bpm = fresh ? heart : linked && now - sensor_received <= 12 ? sensor_bpm : 0;
+  unsigned bpm = fresh && heart ? heart : linked && now - sensor_received <= 12 ? sensor_bpm : 0;
+  bool wrist_preview = !bpm && wrist_bpm && now - wrist_received <= 12;
+  if (wrist_preview) bpm = wrist_bpm;
   unsigned strap = sensor_status & 15, gps = (sensor_status >> 4) & 15;
   unsigned recording = (sensor_status >> 8) & 15;
   unsigned battery_level = (sensor_status >> 16) & 255;
@@ -439,7 +462,8 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   graphics_context_set_text_color(ctx, bpm ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
   label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 20 / 100, w, 48));
   graphics_context_set_text_color(ctx, GColorWhite);
-  label(ctx, "bpm", FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 22));
+  label(ctx, wrist_preview ? "Watch bpm" : bpm ? "bpm" : wrist_sampling ? "Reading wrist…" : "Wrist HR unavailable",
+      FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 22));
   if (linked && strap < 6) {
     int inset = PBL_IF_ROUND_ELSE(w / 7, 10);
     int strap_top = h * 58 / 100, gps_top = h * 72 / 100;
@@ -641,13 +665,14 @@ static void inbox(DictionaryIterator *iter, void *context) {
   Tuple *session = dict_find(iter, TOKEN);
   has_token = session && session->type == TUPLE_UINT && session->length == 4;
   if (has_token) token = session->value->uint32 & SESSION_TOKEN_MASK;
-  set_wrist_sampling(has_token && state == 0 && (session->value->uint32 & HEART_REQUEST_BIT));
+  wrist_requested = has_token && state == 0 && (session->value->uint32 & HEART_REQUEST_BIT);
   if (starting || (first_update && page == HOME && state < 2)) {
     page = WORKOUT;
     starting = false;
     notice_until = 0;
   }
   received = time(NULL);
+  update_wrist_sampling(received);
 #if defined(PBL_HEALTH)
   if (app_worker_is_running()) {
     AppWorkerMessage message = { .data0 = state < 2 };
@@ -661,7 +686,7 @@ static void inbox(DictionaryIterator *iter, void *context) {
 
 static void tick(struct tm *current_time, TimeUnits units) {
   const time_t clock = time(NULL);
-  if (wrist_requested && clock - received > 8) set_wrist_sampling(false);
+  update_wrist_sampling(clock);
   if (!sending && page == SENSORS && clock - sensor_request >= 8) {
     sensor_request = clock;
     send_command(REQUEST_SENSORS, 0);
