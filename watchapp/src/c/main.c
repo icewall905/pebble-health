@@ -51,17 +51,21 @@ static void draw_gauge(GContext *ctx, int left, int top, int width, unsigned act
       graphics_context_set_fill_color(ctx, GColorBlack);
       graphics_fill_rect(ctx, GRect(marker, top + 1, 2, 8), 0, GCornerNone);
     }
+    graphics_context_set_text_color(ctx, selected ? color : GColorWhite);
     label(ctx, labels[i], selected ? FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_14,
           GRect(x - 2, top + 10, segment_width + 4, 20));
   }
+  graphics_context_set_text_color(ctx, GColorWhite);
 }
 
 static void draw_strength(GContext *ctx, int w, int h, bool live,
     const char *clock, const char *status, unsigned active_zone) {
   char text[40];
   int inset = PBL_IF_ROUND_ELSE(w / 6, w / 10);
+  graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRajah, GColorWhite));
   label(ctx, title[0] ? title : "Strength", PBL_IF_ROUND_ELSE(FONT_KEY_GOTHIC_14_BOLD, FONT_KEY_GOTHIC_18_BOLD),
       GRect(inset, h * 8 / 100, w - 2 * inset, 20));
+  graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   snprintf(text, sizeof(text), "%s  /  %lu %s", clock, (unsigned long)count, count == 1 ? "set" : "sets");
   label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 18 / 100, w, 24));
 
@@ -71,13 +75,16 @@ static void draw_strength(GContext *ctx, int w, int h, bool live,
     time_t age = time(NULL) - received;
     unsigned left = resting && age >= 0 && (uint32_t)age < rest ? rest - (uint32_t)age : 0;
     snprintf(text, sizeof(text), "%u:%02u", left / 60, left % 60);
+    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(left ? GColorElectricBlue : GColorMintGreen, GColorWhite));
     label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
     label(ctx, left ? "Rest" : "Rest complete", FONT_KEY_GOTHIC_18_BOLD,
         GRect(0, h * 57 / 100, w, 24));
+    graphics_context_set_text_color(ctx, active_zone ? zone_color(active_zone - 1) : GColorWhite);
     if (heart) snprintf(text, sizeof(text), "%lu bpm", (unsigned long)heart);
     else snprintf(text, sizeof(text), "-- bpm");
     label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 69 / 100, w, 20));
   } else {
+    graphics_context_set_text_color(ctx, active_zone ? zone_color(active_zone - 1) : GColorWhite);
     if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
     else snprintf(text, sizeof(text), "--");
     label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
@@ -120,6 +127,7 @@ static void draw(Layer *layer, GContext *ctx) {
 
   if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
   else snprintf(text, sizeof(text), "--");
+  graphics_context_set_text_color(ctx, active ? zone_color(active - 1) : GColorWhite);
   label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 16 / 100, w, 50));
   if (active > 1) snprintf(text, sizeof(text), "bpm  /  Zone %u", active - 1);
   else if (active == 1) snprintf(text, sizeof(text), "bpm  /  Below Z1");
