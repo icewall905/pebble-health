@@ -84,6 +84,15 @@ To clean up duplicate watch activities, open the unwanted activity and choose
 **Remove from dashboard**. This excludes it from training totals, and **Show removed**
 lets you restore it later. **Delete from phone** removes the local recording itself.
 
+### Strength recording
+
+Choose **Strength** to search or enter an exercise, pin up to five favorites, and use
+the set-count and weight shortcuts. Check the reps per set before logging. Multiple
+identical sets can be recorded together, or logged one by one as you finish them.
+Use **Set rest** to start a 30, 60 or 90 second break. Pebble Health shows when rest is
+complete and posts a phone alert if notifications are allowed. Workout Live shows the
+current exercise, sets logged and countdown alongside heart rate and zones.
+
 ### Live map and watch stats
 
 GPS recordings show the OpenStreetMap street map by default during recording and review.

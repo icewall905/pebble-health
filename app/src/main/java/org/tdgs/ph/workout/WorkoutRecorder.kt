@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.*
@@ -34,6 +35,10 @@ internal data class LiveWorkout(
     val bpm: Int? = null,
     val laps: Int = 0,
     val sets: Int = 0,
+    val exercise: String = "",
+    val lastSet: StrengthSet? = null,
+    val restSeconds: Int = 0,
+    val restComplete: Boolean = false,
     val livePace: Long? = null,
     val mirrorWatch: Boolean = false,
     val watchStatus: String = "",
@@ -65,10 +70,22 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private var seconds = 0
     private var previewStride = 1
     private var acceptedFixes = 0
+    private var restDeadline = 0L
+    private val restWakeLock by lazy {
+        getSystemService(PowerManager::class.java).newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK, "$packageName:strength-rest"
+        ).apply { setReferenceCounted(false) }
+    }
 
     private val ticker = object : Runnable {
         override fun run() {
             val state = live.value ?: return
+            val restSeconds = ((restDeadline - SystemClock.elapsedRealtime() + 999) / 1000).coerceAtLeast(0).toInt()
+            val completedRest = restDeadline != 0L && restSeconds == 0
+            if (completedRest) {
+                clearRestDeadline()
+                notifyRestComplete()
+            }
             val active = activeMs()
             if (seconds++ % 5 == 0) {
                 if (!persist { store.checkpoint(state.workout.id, wallTime(), active) }) return
@@ -80,6 +97,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
             }
             val current = state.copy(
                 active = active,
+                restSeconds = restSeconds,
+                restComplete = state.restComplete || completedRest,
                 livePace = if (state.paused) null else recentPace(paceFixes.toList(), active),
                 bpm = lastBpm.takeIf { runStart != null && SystemClock.elapsedRealtime() - lastPulseTime <= 5000 },
                 gpsStatus = if (wantsGps && runStart != null && state.gpsStatus == "GPS recording" &&
@@ -121,15 +140,33 @@ internal class WorkoutRecorder : Service(), LocationListener {
                     live.value = state.copy(laps = state.laps + 1)
                 }
             }
+            SELECT_EXERCISE -> live.value?.takeIf { it.workout.sport == Sport.strength }?.let { state ->
+                val exercise = intent.getStringExtra("exercise").orEmpty().trim()
+                if (exercise.length in 1..100) live.value = state.copy(exercise = exercise)
+            }
+            REST -> live.value?.takeIf { it.workout.sport == Sport.strength }?.let { state ->
+                val seconds = intent.getIntExtra("seconds", 0)
+                if (seconds == 0 || seconds in 1..600 && !state.paused) {
+                    clearRestDeadline()
+                    if (seconds > 0) {
+                        restDeadline = SystemClock.elapsedRealtime() + seconds * 1000L
+                        restWakeLock.acquire(seconds * 1000L + 3000L)
+                    }
+                    getSystemService(NotificationManager::class.java).cancel(REST_NOTIFICATION)
+                    live.value = state.copy(restSeconds = seconds, restComplete = false)
+                }
+            }
             SET -> {
                 val state = live.value
                 val exercise = intent.getStringExtra("exercise").orEmpty().trim()
                 val reps = intent.getIntExtra("reps", 0)
-                val kg = intent.getDoubleExtra("kg", Double.NaN).takeIf { it.isFinite() && it >= 0 }
-                if (state?.workout?.sport == Sport.strength && exercise.length in 1..100 && reps in 1..999 &&
-                    persist { store.set(state.workout.id, StrengthSet(exercise, reps, kg)) }
+                val count = intent.getIntExtra("count", 1)
+                val kg = intent.getDoubleExtra("kg", Double.NaN).takeIf { it.isFinite() && it in 0.0..10000.0 }
+                val set = StrengthSet(exercise, reps, kg)
+                if (state?.workout?.sport == Sport.strength && !state.paused && exercise.length in 1..100 &&
+                    reps in 1..999 && count in 1..10 && persist { store.sets(state.workout.id, set, count) }
                 ) {
-                    live.value = state.copy(sets = state.sets + 1)
+                    live.value = state.copy(sets = state.sets + count, exercise = exercise, lastSet = set)
                 }
             }
             FINISH -> finish()
@@ -329,6 +366,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
         watch?.close()
         watch = null
         handler.removeCallbacksAndMessages(null)
+        clearRestDeadline()
+        getSystemService(NotificationManager::class.java).cancel(REST_NOTIFICATION)
         runCatching { location.removeUpdates(this) }
         strap?.close()
         strap = null
@@ -342,6 +381,30 @@ internal class WorkoutRecorder : Service(), LocationListener {
         shutdown()
         watchScope.cancel()
         super.onDestroy()
+    }
+
+    private fun clearRestDeadline() {
+        if (restDeadline != 0L && restWakeLock.isHeld) restWakeLock.release()
+        restDeadline = 0
+    }
+
+    private fun notifyRestComplete() {
+        if (Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) return
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(REST_CHANNEL, "Strength rest timer", NotificationManager.IMPORTANCE_HIGH).apply {
+                enableVibration(true)
+            }
+        )
+        val open = Intent(this, WorkoutActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val pending = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE)
+        manager.notify(REST_NOTIFICATION, Notification.Builder(this, REST_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Rest complete")
+            .setContentText("Ready for your next set.")
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .build())
     }
 
     private fun notification(sport: Sport): Notification {
@@ -365,8 +428,12 @@ internal class WorkoutRecorder : Service(), LocationListener {
         const val RESUME = "resume"
         const val LAP = "lap"
         const val SET = "set"
+        const val REST = "rest"
+        const val SELECT_EXERCISE = "select_exercise"
         const val FINISH = "finish"
         private const val CHANNEL = "gravel_workouts"
+        private const val REST_CHANNEL = "strength_rest"
+        private const val REST_NOTIFICATION = 0x3713
         private const val NOTIFICATION = 0x3712
         private const val MAX_ACTIVE_MS = 172_800_000L
         val live = MutableStateFlow<LiveWorkout?>(null)

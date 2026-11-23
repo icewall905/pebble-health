@@ -92,8 +92,19 @@ internal class WorkoutStore private constructor(context: Context) :
     fun pulse(id: String, p: Pulse) = insert("pulse", "workout" to id, "active" to p.active, "bpm" to p.bpm,
         "wall" to p.time, "segment" to p.segment, "rr" to p.rrTicks.joinToString(" "), "energy" to p.energyKj)
     fun lap(id: String, p: Lap) = insert("lap", "workout" to id, "active" to p.active, "meters" to p.meters)
-    fun set(id: String, set: StrengthSet) = insert("strength", "workout" to id,
-        "exercise" to set.exercise, "reps" to set.reps, "kg" to set.kg)
+    fun sets(id: String, set: StrengthSet, count: Int) {
+        val db = writableDatabase
+        db.beginTransactionNonExclusive()
+        try {
+            repeat(count) {
+                insert("strength", "workout" to id, "exercise" to set.exercise, "reps" to set.reps, "kg" to set.kg)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun effort(id: String, effort: Int?) {
         val values = ContentValues().apply { if (effort == null) putNull("rpe") else put("rpe", effort) }
         writableDatabase.update("workout", values, "id=?", arrayOf(id))

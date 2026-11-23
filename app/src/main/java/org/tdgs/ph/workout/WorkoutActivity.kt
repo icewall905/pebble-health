@@ -380,25 +380,28 @@ private fun livePaceLabel(value: Long, cycling: Boolean): String =
 private fun Recording(state: LiveWorkout) {
     val context = LocalContext.current
     var finish by remember { mutableStateOf(false) }
-    var addSet by remember { mutableStateOf(false) }
+    val sport = state.workout.sport
+    val strength = sport == Sport.strength
+    val routeMode = state.gpsStatus.isNotEmpty() && !strength
     val command = { action: String -> WorkoutRecorder.command(context, action) }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             item {
-                Text(if (state.paused) "Paused" else "Active time", color = MaterialTheme.colorScheme.primary)
+                Text(sport.label + if (state.paused) " · Paused" else " · Active time", color = MaterialTheme.colorScheme.primary)
                 Text(duration(state.active), fontSize = 54.sp, fontWeight = FontWeight.SemiBold, lineHeight = 60.sp)
             }
             item {
                 HorizontalDivider()
                 Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.weight(1f)) { Readout("Distance", if (state.gpsStatus.isNotEmpty()) distance(state.distance) else "—") }
+                        if (routeMode) Box(Modifier.weight(1f)) { Readout("Distance", distance(state.distance)) }
+                        if (strength) Box(Modifier.weight(1f)) { Readout("Sets logged", state.sets.toString()) }
                         Box(Modifier.weight(1f)) { Readout("Heart rate", state.bpm?.let { "$it bpm" } ?: "—") }
                     }
                     state.heartZone?.let { zone ->
                         Readout("Heart-rate zone", if (zone == 0) "Below zone 1" else "Zone $zone")
                     }
-                    if (state.gpsStatus.isNotEmpty()) Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
+                    if (routeMode) Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(12.dp)) {
                         val cycling = state.workout.sport == Sport.cycle
                         Box(Modifier.weight(1f)) {
                             Readout(if (cycling) "Live speed" else "Live pace", state.livePace?.let { livePaceLabel(it, cycling) } ?: "—")
@@ -408,9 +411,12 @@ private fun Recording(state: LiveWorkout) {
                             Readout(if (cycling) "Avg speed" else "Avg pace", avg?.let { livePaceLabel(it, cycling) } ?: "—")
                         }
                     }
-                    Text(if (state.workout.sport == Sport.strength) "${state.sets} sets · ${state.laps} laps" else "${state.laps} laps",
-                        style = MaterialTheme.typography.bodySmall)
+                    if (!strength) Text("${state.laps} laps", style = MaterialTheme.typography.bodySmall)
                 }
+            }
+            if (strength) {
+                item { StrengthRest(state) }
+                item { StrengthRecording(state) }
             }
             if (state.gpsStatus.isNotEmpty() || state.strapStatus.isNotEmpty() || state.watchStatus.isNotEmpty()) {
                 item {
@@ -425,8 +431,8 @@ private fun Recording(state: LiveWorkout) {
                     }
                 }
             }
-            if (state.route.isNotEmpty()) item { WorkoutMap(state.route, follow = true) }
-            else if (state.gpsStatus.isNotEmpty()) item { Text("Map appears after the first usable GPS fix.") }
+            if (routeMode && state.route.isNotEmpty()) item { WorkoutMap(state.route, follow = true) }
+            else if (routeMode) item { Text("Map appears after the first usable GPS fix.") }
         }
         HorizontalDivider()
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -434,11 +440,8 @@ private fun Recording(state: LiveWorkout) {
                 Button(modifier = Modifier.weight(1f), onClick = { command(if (state.paused) WorkoutRecorder.RESUME else WorkoutRecorder.PAUSE) }) {
                     Text(if (state.paused) "Resume" else "Pause")
                 }
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = !state.paused,
+                if (!strength) OutlinedButton(modifier = Modifier.weight(1f), enabled = !state.paused,
                     onClick = { command(WorkoutRecorder.LAP) }) { Text("Lap") }
-            }
-            if (state.workout.sport == Sport.strength) {
-                FilledTonalButton(modifier = Modifier.fillMaxWidth(), onClick = { addSet = true }) { Text("Add strength set") }
             }
             TextButton(modifier = Modifier.fillMaxWidth(), onClick = { finish = true }) { Text("Finish workout") }
         }
@@ -448,42 +451,6 @@ private fun Recording(state: LiveWorkout) {
         text = { Text("Save this recording to your workout history.") },
         confirmButton = { TextButton(onClick = { finish = false; command(WorkoutRecorder.FINISH) }) { Text("Finish and save") } },
         dismissButton = { TextButton(onClick = { finish = false }) { Text("Keep recording") } },
-    )
-    if (addSet) SetDialog(onDismiss = { addSet = false }) { set ->
-        WorkoutRecorder.command(context, WorkoutRecorder.SET) {
-            putExtra("exercise", set.exercise)
-            putExtra("reps", set.reps)
-            putExtra("kg", set.kg ?: Double.NaN)
-        }
-        addSet = false
-    }
-}
-
-@Composable
-private fun SetDialog(onDismiss: () -> Unit, save: (StrengthSet) -> Unit) {
-    var exercise by rememberSaveable { mutableStateOf("") }
-    var reps by rememberSaveable { mutableStateOf("") }
-    var load by rememberSaveable { mutableStateOf("") }
-    val count = reps.toIntOrNull()
-    val kg = load.replace(',', '.').toDoubleOrNull()
-    AlertDialog(
-        onDismissRequest = onDismiss, title = { Text("Add strength set") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(exercise, { exercise = it.take(100) }, label = { Text("Exercise") }, singleLine = true)
-                OutlinedTextField(reps, { reps = it.take(3) }, label = { Text("Reps") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                OutlinedTextField(load, { load = it.take(8) }, label = { Text("Weight (kg, optional)") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = exercise.isNotBlank() && count != null && count in 1..999 &&
-                (load.isBlank() || kg != null && kg.isFinite() && kg >= 0), onClick = {
-                if (count != null) save(StrengthSet(exercise.trim(), count, kg))
-            }) { Text("Save set") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

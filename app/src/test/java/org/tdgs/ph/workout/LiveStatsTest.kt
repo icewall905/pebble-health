@@ -1,10 +1,27 @@
 package org.tdgs.ph.workout
 
 import kotlin.test.Test
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class LiveStatsTest {
+    @Test
+    fun strengthPacketFitsOlderWatchInboxAndKeepsUtf8Intact() {
+        val state = LiveWorkout(Workout("strength", Sport.strength, 0, 0, 0),
+            exercise = "Bænkpres 💪".repeat(5), sets = 3, restSeconds = 60)
+        val data = workoutWatchData(state)
+        assertEquals(1u, data[8u]?.value)
+        assertEquals(3u, data[9u]?.value)
+        assertEquals(60u, data[10u]?.value)
+        val title = data[11u]?.value as String
+        assertTrue(state.exercise.startsWith(title))
+        assertFalse(title.last().isHighSurrogate())
+        assertTrue(2 + data.values.sumOf { 7 + it.size } <= 128)
+        assertEquals(0u, workoutWatchData(state, finished = true)[10u]?.value)
+    }
+
     private fun fix(time: Long, meters: Double, segment: Int = 0) =
         Fix(time, time, segment, 55.0, 12.0, null, 5f, meters)
 

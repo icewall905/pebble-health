@@ -1,9 +1,11 @@
 #include <pebble.h>
 
-enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART };
+enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART, MODE, COUNT, REST, TITLE };
 static Window *window;
 static Layer *display;
 static uint32_t elapsed, meters, pace, heart, state, zone, battery, max_heart;
+static uint32_t mode, count, rest;
+static char title[32];
 static time_t received;
 
 static void label(GContext *ctx, const char *text, const char *font, GRect bounds) {
@@ -54,6 +56,40 @@ static void draw_gauge(GContext *ctx, int left, int top, int width, unsigned act
   }
 }
 
+static void draw_strength(GContext *ctx, int w, int h, bool live,
+    const char *clock, const char *status, unsigned active_zone) {
+  char text[40];
+  int inset = PBL_IF_ROUND_ELSE(w / 6, w / 10);
+  label(ctx, title[0] ? title : "Strength", PBL_IF_ROUND_ELSE(FONT_KEY_GOTHIC_14_BOLD, FONT_KEY_GOTHIC_18_BOLD),
+      GRect(inset, h * 8 / 100, w - 2 * inset, 20));
+  snprintf(text, sizeof(text), "%s  /  %lu %s", clock, (unsigned long)count, count == 1 ? "set" : "sets");
+  label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 18 / 100, w, 24));
+
+  bool resting = live && rest > 0 && rest < 601;
+  bool complete = live && rest == 601;
+  if (resting || complete) {
+    time_t age = time(NULL) - received;
+    unsigned left = resting && age >= 0 && (uint32_t)age < rest ? rest - (uint32_t)age : 0;
+    snprintf(text, sizeof(text), "%u:%02u", left / 60, left % 60);
+    label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
+    label(ctx, left ? "Rest" : "Rest complete", FONT_KEY_GOTHIC_18_BOLD,
+        GRect(0, h * 57 / 100, w, 24));
+    if (heart) snprintf(text, sizeof(text), "%lu bpm", (unsigned long)heart);
+    else snprintf(text, sizeof(text), "-- bpm");
+    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 69 / 100, w, 20));
+  } else {
+    if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
+    else snprintf(text, sizeof(text), "--");
+    label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
+    if (status) snprintf(text, sizeof(text), "%s", status);
+    else if (active_zone > 1) snprintf(text, sizeof(text), "bpm  /  Zone %u", active_zone - 1);
+    else if (active_zone == 1) snprintf(text, sizeof(text), "bpm  /  Below Z1");
+    else snprintf(text, sizeof(text), "Heart rate");
+    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 57 / 100, w, 24));
+  }
+  draw_gauge(ctx, inset, h * 78 / 100, w - 2 * inset, active_zone);
+}
+
 static void draw(Layer *layer, GContext *ctx) {
   GRect frame = layer_get_bounds(layer);
   int w = frame.size.w, h = frame.size.h;
@@ -74,10 +110,14 @@ static void draw(Layer *layer, GContext *ctx) {
   if (elapsed >= 3600) snprintf(time, sizeof(time), "%lu:%02lu:%02lu",
       (unsigned long)(elapsed / 3600), (unsigned long)(elapsed / 60 % 60), (unsigned long)(elapsed % 60));
   else snprintf(time, sizeof(time), "%02lu:%02lu", (unsigned long)(elapsed / 60), (unsigned long)(elapsed % 60));
+  unsigned active = live && heart && zone <= 6 ? zone : 0;
+  if (mode == 1) {
+    draw_strength(ctx, w, h, live, time, status, active);
+    return;
+  }
   snprintf(text, sizeof(text), "%s%s%s", time, status ? "  " : "", status ? status : "");
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 5 / 100, w, 23));
 
-  unsigned active = live && heart && zone <= 6 ? zone : 0;
   if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
   else snprintf(text, sizeof(text), "--");
   label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 16 / 100, w, 50));
@@ -91,10 +131,20 @@ static void draw(Layer *layer, GContext *ctx) {
   int left = PBL_IF_ROUND_ELSE(w / 10, 4);
   int metric_width = w / 2 - left;
   int metric_top = h * 76 / 100;
+  if (mode == 3) {
+    snprintf(text, sizeof(text), "%.15s  /  %lu %s", title[0] ? title : "Workout",
+        (unsigned long)count, count == 1 ? "lap" : "laps");
+    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(left, metric_top, w - 2 * left, 23));
+    return;
+  }
   snprintf(text, sizeof(text), "%lu.%02lu km", (unsigned long)(meters / 1000), (unsigned long)(meters % 1000 / 10));
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(left, metric_top, metric_width, 23));
-  if (live && pace) snprintf(text, sizeof(text), "%lu:%02lu/km", (unsigned long)(pace / 60), (unsigned long)(pace % 60));
-  else snprintf(text, sizeof(text), "-- /km");
+  if (mode == 2) {
+    if (live && pace) snprintf(text, sizeof(text), "%lu km/h", (unsigned long)((3600 + pace / 2) / pace));
+    else snprintf(text, sizeof(text), "-- km/h");
+  } else if (live && pace) {
+    snprintf(text, sizeof(text), "%lu:%02lu/km", (unsigned long)(pace / 60), (unsigned long)(pace % 60));
+  } else snprintf(text, sizeof(text), "-- /km");
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(w / 2, metric_top, metric_width, 23));
   if (battery && !stale) {
     snprintf(text, sizeof(text), "Strap %lu%%", (unsigned long)(battery - 1));
@@ -103,11 +153,16 @@ static void draw(Layer *layer, GContext *ctx) {
 }
 
 static void inbox(DictionaryIterator *iter, void *context) {
-  uint32_t *fields[] = { &elapsed, &meters, &pace, &heart, &state, &zone, &battery, &max_heart };
+  mode = 0;
+  uint32_t *fields[] = { &elapsed, &meters, &pace, &heart, &state, &zone, &battery, &max_heart,
+                        &mode, &count, &rest };
   for (unsigned i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
     Tuple *tuple = dict_find(iter, i);
     if (tuple && tuple->type == TUPLE_UINT && tuple->length == 4) *fields[i] = tuple->value->uint32;
   }
+  Tuple *name = dict_find(iter, TITLE);
+  title[0] = 0;
+  if (name && name->type == TUPLE_CSTRING) snprintf(title, sizeof(title), "%s", name->value->cstring);
   received = time(NULL);
   layer_mark_dirty(display);
 }
