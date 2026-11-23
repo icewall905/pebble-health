@@ -103,6 +103,15 @@ or strength rest and repeat-set, and finishing or discarding. Discard requires a
 second confirmation and deletes the unsaved recording. If Android blocks an
 unprepared start, check your phone for the start notification.
 
+### Browse from the watch
+
+On the home screen, **Up** opens **Live stats** with heart rate and phone GPS and chest
+strap status. During a recording, press **Up** again for the workout display.
+**Down** opens the eight most recent phone and synced dashboard activities. Scroll with
+**Up** and **Down**, and use **Select** to see an entry's details. The last fetched list
+is available on the watch if your phone is out of range. From home, **Select** opens
+the sport picker or controls for the recording in progress.
+
 ### Automatic walk and run prompts
 
 On a Pebble with Pebble Health enabled, open **Pebble Health Workout**, press **Select**,

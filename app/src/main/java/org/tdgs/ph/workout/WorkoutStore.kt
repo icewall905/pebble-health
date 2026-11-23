@@ -126,11 +126,11 @@ internal class WorkoutStore private constructor(context: Context) :
 
     data class HistoryEntry(val workout: Workout, val distance: Double?)
 
-    fun history() = query("""
+    fun history(limit: Int = -1) = query("""
         SELECT id,sport,started,ended,active,state,rpe,title,notes,manual,manual_distance,uploaded,
             COALESCE(manual_distance, (SELECT meters FROM fix WHERE workout=w.id ORDER BY row DESC LIMIT 1))
-        FROM workout w WHERE state!=0 ORDER BY started DESC
-    """.trimIndent(), emptyArray()) { HistoryEntry(workout(), doubleOrNull(12)) }
+        FROM workout w WHERE state!=0 ORDER BY started DESC LIMIT ?
+    """.trimIndent(), arrayOf(limit.toString())) { HistoryEntry(workout(), doubleOrNull(12)) }
 
     fun detail(id: String): WorkoutDetail? {
         val args = arrayOf(id)

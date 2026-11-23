@@ -11,17 +11,23 @@ import android.content.pm.PackageManager
 import android.os.Build
 import io.rebble.pebblekit2.client.BasePebbleListenerService
 import io.rebble.pebblekit2.client.DefaultPebbleAndroidAppPicker
+import io.rebble.pebblekit2.client.DefaultPebbleSender
 import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 import io.rebble.pebblekit2.common.model.ReceiveResult
 import io.rebble.pebblekit2.common.model.WatchIdentifier
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
 import java.util.UUID
 
 internal val watchSports = listOf(Sport.run, Sport.walk, Sport.hike, Sport.cycle, Sport.strength,
     Sport.tennis, Sport.rowing, Sport.yoga, Sport.beat_saber, Sport.workout)
 
 class WatchWorkoutCommands : BasePebbleListenerService() {
+    private val sender = lazy { DefaultPebbleSender(applicationContext) }
     private var lastAccepted: Pair<WatchIdentifier, UInt>? = null
 
     override fun onCreate() {
@@ -31,6 +37,7 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
 
     override fun onDestroy() {
         coroutineScope.cancel()
+        if (sender.isInitialized()) sender.value.close()
         super.onDestroy()
     }
 
@@ -41,6 +48,23 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
         val command = data.number(20u)
         val argument = data.number(21u)
         val state = WorkoutRecorder.live.value
+        if (command == 9u || command == 10u) {
+            // Return the watch's transport ACK before sending a separate reply.
+            coroutineScope.launch {
+                delay(150)
+                try {
+                    val response = if (command == 9u) watchSensorStatus(this@WatchWorkoutCommands, WorkoutRecorder.live.value)
+                        else watchHistory(this@WatchWorkoutCommands)
+                    withTimeoutOrNull(5000) { sender.value.sendDataToPebble(WORKOUT_WATCH_UUID, response, listOf(watch)) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The watch keeps any cached results and lets the user try again.
+                }
+            }
+            lastAccepted = request
+            return ReceiveResult.Ack
+        }
         if (command == 1u) {
             if (state != null) return ReceiveResult.Nack
             val sport = argument?.toInt()?.let(watchSports::getOrNull) ?: return ReceiveResult.Nack

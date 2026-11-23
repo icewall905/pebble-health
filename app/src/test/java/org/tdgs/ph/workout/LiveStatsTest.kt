@@ -31,6 +31,23 @@ class LiveStatsTest {
         assertEquals(3u, workoutWatchData(state, finished = true, discarded = true)[4u]?.value)
     }
 
+    @Test
+    fun watchHistoryUsesFixedLittleEndianRowsWithinInboxBudget() {
+        val run = WatchHistoryEntry(Sport.run, 1_795_400_000, 900, 2410.0)
+        val walk = WatchHistoryEntry(Sport.walk, 1_795_390_000, 120, null)
+        val packed = watchHistoryBytes(listOf(run, walk) + List(9) { walk })
+        assertEquals(104, packed.size)
+        val buffer = java.nio.ByteBuffer.wrap(packed).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        assertEquals(0, buffer.get().toInt())
+        assertEquals(run.start.toInt(), buffer.int)
+        assertEquals(run.duration, buffer.int)
+        assertEquals(2410, buffer.int)
+        assertEquals(1, buffer.get().toInt())
+        assertEquals(walk.start.toInt(), buffer.int)
+        assertEquals(walk.duration, buffer.int)
+        assertEquals(-1, buffer.int)
+    }
+
     private fun fix(time: Long, meters: Double, segment: Int = 0) =
         Fix(time, time, segment, 55.0, 12.0, null, 5f, meters)
 

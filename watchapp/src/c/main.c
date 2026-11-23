@@ -13,6 +13,16 @@ static char title[32];
 static time_t received;
 static uint32_t token, menu_token, sequence;
 static bool has_token, sending, starting;
+static unsigned pending_command;
+enum { HOME, SENSORS, WORKOUT, HISTORY, HISTORY_DETAIL };
+static unsigned page;
+
+enum { HISTORY_LIMIT = 8, HISTORY_ROW = 13, HISTORY_KEY = 203 };
+static uint8_t history[HISTORY_LIMIT * HISTORY_ROW];
+static unsigned history_count, history_selection;
+static bool history_answered;
+static time_t history_request, sensor_request, sensor_received;
+static uint32_t sensor_status, sensor_bpm;
 static time_t notice_until;
 static const char *notice;
 static Window *options_window;
@@ -21,7 +31,7 @@ static SimpleMenuItem items[11];
 static unsigned actions[11];
 static SimpleMenuSection section;
 
-enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
+enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
 enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT };
 static const char *sports[] = {
   "Running", "Walking", "Hiking", "Cycling", "Strength",
@@ -64,12 +74,13 @@ static void send_command(unsigned command, unsigned argument) {
   dict_write_uint8(out, 20, command);
   dict_write_uint8(out, 21, argument);
   dict_write_uint32(out, 23, ++sequence);
-  if (command != START) dict_write_uint32(out, 22, menu_token);
+  if (command >= PAUSE && command <= REPEAT_SET) dict_write_uint32(out, 22, menu_token);
   if (app_message_outbox_send() == APP_MSG_OK) {
+    pending_command = command;
     sending = true;
     starting = command == START;
     if (starting) show_notice("Starting on phone...");
-  } else {
+  } else if (command < REQUEST_SENSORS) {
     show_notice("Could not reach phone");
   }
 }
@@ -174,7 +185,13 @@ static void detection_message(uint16_t type, AppWorkerMessage *message) {
 #endif
 
 static void open_options(ClickRecognizerRef recognizer, void *context) {
-  if (sending) return;
+  if (sending && pending_command < REQUEST_SENSORS) return;
+  if (page == HISTORY && history_count) {
+    page = HISTORY_DETAIL;
+    layer_mark_dirty(display);
+    return;
+  }
+  if (page == HISTORY || page == HISTORY_DETAIL) return;
   if (received && state < 2 && time(NULL) - received <= 8) {
     if (!has_token) {
       show_notice("Update Pebble Health");
@@ -188,8 +205,47 @@ static void open_options(ClickRecognizerRef recognizer, void *context) {
   window_stack_push(options_window, true);
 }
 
+static void navigation_back(ClickRecognizerRef recognizer, void *context) {
+  if (page == HOME) {
+    window_stack_pop(true);
+    return;
+  }
+  page = page == HISTORY_DETAIL ? HISTORY : HOME;
+  notice_until = 0;
+  layer_mark_dirty(display);
+}
+
+static void navigation_up(ClickRecognizerRef recognizer, void *context) {
+  if (page == HISTORY || page == HISTORY_DETAIL) {
+    if (history_selection > 0) history_selection--;
+  } else if (page == SENSORS && received && state < 2 && time(NULL) - received <= 8) {
+    page = WORKOUT;
+  } else {
+    page = SENSORS;
+    notice_until = 0;
+    sensor_request = 0;
+  }
+  layer_mark_dirty(display);
+}
+
+static void navigation_down(ClickRecognizerRef recognizer, void *context) {
+  if (page == HISTORY || page == HISTORY_DETAIL) {
+    if (history_selection + 1 < history_count) history_selection++;
+  } else {
+    page = HISTORY;
+    notice_until = 0;
+    history_selection = 0;
+    history_request = 0;
+    history_answered = false;
+  }
+  layer_mark_dirty(display);
+}
+
 static void click_config(void *context) {
+  window_single_click_subscribe(BUTTON_ID_UP, navigation_up);
   window_single_click_subscribe(BUTTON_ID_SELECT, open_options);
+  window_single_click_subscribe(BUTTON_ID_DOWN, navigation_down);
+  window_single_click_subscribe(BUTTON_ID_BACK, navigation_back);
 }
 
 static void outbox_sent(DictionaryIterator *iter, void *context) {
@@ -199,8 +255,10 @@ static void outbox_sent(DictionaryIterator *iter, void *context) {
 
 static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
   sending = false;
-  show_notice(starting ? "Check phone to start" : "Command not delivered");
-  starting = false;
+  if (pending_command < REQUEST_SENSORS) {
+    show_notice(starting ? "Check phone to start" : "Command not delivered");
+    starting = false;
+  }
 }
 
 
@@ -293,6 +351,138 @@ static void draw_strength(GContext *ctx, int w, int h, bool live,
   draw_gauge(ctx, inset, h * 78 / 100, w - 2 * inset, active_zone);
 }
 
+static void home_row(GContext *ctx, int w, int y, const char *button, const char *name, bool primary) {
+  int inset = PBL_IF_ROUND_ELSE(w / 7, 10);
+  graphics_context_set_fill_color(ctx, primary ? PBL_IF_COLOR_ELSE(GColorMidnightGreen, GColorWhite) :
+      PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorBlack));
+  graphics_fill_rect(ctx, GRect(inset, y, w - 2 * inset, 25), 5, GCornersAll);
+  graphics_context_set_text_color(ctx, primary ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorBlack) : GColorWhite);
+  label(ctx, button, FONT_KEY_GOTHIC_14_BOLD, GRect(inset + 2, y + 4, 46, 18));
+  graphics_draw_text(ctx, name, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(inset + 52, y, w - 2 * inset - 54, 23),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_context_set_text_color(ctx, GColorWhite);
+}
+
+static void draw_home(GContext *ctx, int w, int h) {
+#if defined(PBL_COLOR)
+  if (workout_mark) {
+    graphics_context_set_compositing_mode(ctx, GCompOpSet);
+    graphics_draw_bitmap_in_rect(ctx, workout_mark, GRect((w - 25) / 2, h / 18, 25, 25));
+  }
+#endif
+  const char *font = h >= 200 ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD;
+  label(ctx, "Pebble Health", font, GRect(0, h * 18 / 100, w, 34));
+  label(ctx, "Workout", font, GRect(0, h * 31 / 100, w, 34));
+  const int top = h * 51 / 100;
+  const int gap = h < 180 ? 26 : (h - top - 26) / 2 - 4;
+  home_row(ctx, w, top, "Up", "Live stats", false);
+  home_row(ctx, w, top + gap, "Select", "Workouts", true);
+  home_row(ctx, w, top + 2 * gap, "Down", "History", false);
+}
+
+static void draw_sensors(GContext *ctx, int w, int h) {
+  const time_t now = time(NULL);
+  bool linked = sensor_received && now - sensor_received <= 20;
+  bool fresh = received && now - received <= 8 && state == 0;
+  unsigned bpm = fresh ? heart : linked && now - sensor_received <= 12 ? sensor_bpm : 0;
+  unsigned strap = sensor_status & 15, gps = (sensor_status >> 4) & 15;
+  unsigned recording = (sensor_status >> 8) & 15;
+  unsigned battery_level = (sensor_status >> 16) & 255;
+  const char *strap_text[] = {"No strap selected", "Strap saved · idle", "Connecting strap…", "Strap connected", "Strap active"};
+  const char *gps_text[] = {"GPS off", "GPS ready", "Finding GPS…", "GPS fix", "GPS paused", "GPS unavailable"};
+  char text[32];
+
+  label(ctx, "Live stats", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 5 / 100, w, 32));
+  if (bpm) snprintf(text, sizeof(text), "%u", bpm);
+  else snprintf(text, sizeof(text), "--");
+  graphics_context_set_text_color(ctx, bpm ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
+  label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 20 / 100, w, 48));
+  graphics_context_set_text_color(ctx, GColorWhite);
+  label(ctx, "bpm", FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 22));
+  if (linked && strap < 5) {
+    if (battery_level) snprintf(text, sizeof(text), "%s · %u%%", strap_text[strap], battery_level - 1);
+    else snprintf(text, sizeof(text), "%s", strap_text[strap]);
+    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 59 / 100, w, 23));
+    if (gps < 6) label(ctx, gps_text[gps], FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 72 / 100, w, 24));
+  } else {
+    label(ctx, "Waiting for phone", FONT_KEY_GOTHIC_18, GRect(0, h * 63 / 100, w, 24));
+  }
+  const char *hint = !linked ? "Open Pebble Health" : recording == 1 || recording == 2 ? "Up  /  Workout" :
+      recording == 3 ? "Phone ready to start" : "Phone linked";
+  label(ctx, hint, FONT_KEY_GOTHIC_14, GRect(0, h * 87 / 100, w, 19));
+}
+
+static uint32_t history_value(const uint8_t *bytes) {
+  return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 |
+      (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
+}
+
+static void history_duration(uint32_t seconds, char *out, size_t size) {
+  if (seconds >= 3600) snprintf(out, size, "%luh %02lum", (unsigned long)(seconds / 3600),
+      (unsigned long)(seconds / 60 % 60));
+  else snprintf(out, size, "%lu:%02lu", (unsigned long)(seconds / 60), (unsigned long)(seconds % 60));
+}
+
+static void history_date(const uint8_t *row, char *out, size_t size, const char *format) {
+  time_t start = history_value(row + 1);
+  struct tm *local = localtime(&start);
+  if (local) strftime(out, size, format, local);
+  else out[0] = 0;
+}
+
+static void draw_history(GContext *ctx, int w, int h) {
+  int inset = PBL_IF_ROUND_ELSE(w / 8, 8);
+  label(ctx, "History", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 4 / 100, w, 34));
+  if (!history_count) {
+    const char *message = history_answered ? "No saved workouts" :
+        history_request && time(NULL) - history_request <= 8 ? "Loading workouts…" : "Open Pebble Health";
+    label(ctx, message, FONT_KEY_GOTHIC_18, GRect(0, h / 2, w, 28));
+    return;
+  }
+
+  char text[40], date[18], duration[18];
+  if (page == HISTORY_DETAIL) {
+    const uint8_t *row = history + history_selection * HISTORY_ROW;
+    unsigned sport = row[0];
+    const char *name = sport < ARRAY_LENGTH(sports) ? sports[sport] : "Workout";
+    label(ctx, name, FONT_KEY_GOTHIC_28_BOLD, GRect(0, h * 26 / 100, w, 35));
+    history_date(row, date, sizeof(date), "%d %b %H:%M");
+    label(ctx, date, FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 25));
+    history_duration(history_value(row + 5), duration, sizeof(duration));
+    label(ctx, duration, FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 60 / 100, w, 31));
+    uint32_t distance = history_value(row + 9);
+    if (distance != UINT32_MAX) {
+      snprintf(text, sizeof(text), "%lu.%02lu km", (unsigned long)(distance / 1000),
+          (unsigned long)(distance % 1000 / 10));
+      label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 79 / 100, w, 25));
+    }
+    return;
+  }
+
+  unsigned first = history_selection > 1 ? history_selection - 1 : 0;
+  if (history_count > 3 && first > history_count - 3) first = history_count - 3;
+  int row_h = (h * 64 / 100) / 3;
+  for (unsigned i = first; i < first + 3 && i < history_count; i++) {
+    const uint8_t *row = history + i * HISTORY_ROW;
+    unsigned sport = row[0];
+    int y = h * 22 / 100 + (i - first) * row_h;
+    bool selected = i == history_selection;
+    graphics_context_set_fill_color(ctx, selected ? PBL_IF_COLOR_ELSE(GColorMidnightGreen, GColorWhite) :
+        PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorBlack));
+    graphics_fill_rect(ctx, GRect(inset, y, w - 2 * inset, row_h - 3), 5, GCornersAll);
+    if (selected) graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorMintGreen, GColorBlack));
+    label(ctx, sport < ARRAY_LENGTH(sports) ? sports[sport] : "Workout", FONT_KEY_GOTHIC_18_BOLD,
+        GRect(inset, y, w - 2 * inset, 21));
+    history_date(row, date, sizeof(date), "%d %b");
+    history_duration(history_value(row + 5), duration, sizeof(duration));
+    snprintf(text, sizeof(text), "%s  /  %s", date, duration);
+    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(inset, y + 17, w - 2 * inset, 18));
+    graphics_context_set_text_color(ctx, GColorWhite);
+  }
+  snprintf(text, sizeof(text), "%u / %u%s", history_selection + 1, history_count, history_answered ? "" : "  ·  Cached");
+  label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 87 / 100, w, 18));
+}
+
 static void draw(Layer *layer, GContext *ctx) {
   GRect frame = layer_get_bounds(layer);
   int w = frame.size.w, h = frame.size.h;
@@ -304,20 +494,9 @@ static void draw(Layer *layer, GContext *ctx) {
     label(ctx, notice, FONT_KEY_GOTHIC_18_BOLD, GRect(w / 12, h * 38 / 100, w * 5 / 6, 28));
     return;
   }
-  if (!received) {
-#if defined(PBL_COLOR)
-    if (workout_mark) {
-      graphics_context_set_compositing_mode(ctx, GCompOpSet);
-      graphics_draw_bitmap_in_rect(ctx, workout_mark, GRect((w - 25) / 2, 5, 25, 25));
-    }
-#endif
-    label(ctx, "Pebble Health", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h / 6, w, 34));
-    label(ctx, "Workout", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h / 6 + 26, w, 34));
-    graphics_draw_text(ctx, "Press Select to start a workout.",
-        fonts_get_system_font(FONT_KEY_GOTHIC_18), GRect(w / 7, h / 2, w * 5 / 7, h / 3),
-        GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-    return;
-  }
+  if (page == SENSORS) { draw_sensors(ctx, w, h); return; }
+  if (page == HISTORY || page == HISTORY_DETAIL) { draw_history(ctx, w, h); return; }
+  if (page == HOME || !received) { draw_home(ctx, w, h); return; }
 
   const char *status = state == 3 ? "Discarded" : state == 2 ? "Finished" : stale ? "Signal lost" : state == 1 ? "Paused" : NULL;
   char time[16];
@@ -368,6 +547,38 @@ static void draw(Layer *layer, GContext *ctx) {
 }
 
 static void inbox(DictionaryIterator *iter, void *context) {
+  Tuple *status_reply = dict_find(iter, 24);
+  if (status_reply && status_reply->type == TUPLE_UINT && status_reply->length == 4) {
+    sensor_status = status_reply->value->uint32;
+    Tuple *bpm = dict_find(iter, 25);
+    sensor_bpm = bpm && bpm->type == TUPLE_UINT && bpm->length == 4 ? bpm->value->uint32 : 0;
+    sensor_received = time(NULL);
+    layer_mark_dirty(display);
+    return;
+  }
+  Tuple *count_reply = dict_find(iter, 27);
+  if (count_reply && count_reply->type == TUPLE_UINT && count_reply->length == 4) {
+    unsigned rows = count_reply->value->uint32;
+    Tuple *payload = dict_find(iter, 26);
+    if (rows <= HISTORY_LIMIT && (!rows ||
+        (payload && payload->type == TUPLE_BYTE_ARRAY && payload->length == rows * HISTORY_ROW))) {
+      if (rows) {
+        if (rows != history_count || memcmp(history, payload->value->data, rows * HISTORY_ROW)) {
+          memcpy(history, payload->value->data, rows * HISTORY_ROW);
+          persist_write_data(HISTORY_KEY, history, rows * HISTORY_ROW);
+        }
+      } else if (history_count) {
+        persist_delete(HISTORY_KEY);
+      }
+      history_count = rows;
+      if (history_selection >= rows) history_selection = rows ? rows - 1 : 0;
+      if (!rows && page == HISTORY_DETAIL) page = HISTORY;
+      history_answered = true;
+      layer_mark_dirty(display);
+    }
+    return;
+  }
+  const bool first_update = !received;
   mode = 0;
   uint32_t *fields[] = { &elapsed, &meters, &pace, &heart, &state, &zone, &battery, &max_heart,
                         &mode, &count, &rest };
@@ -381,7 +592,8 @@ static void inbox(DictionaryIterator *iter, void *context) {
   Tuple *session = dict_find(iter, TOKEN);
   has_token = session && session->type == TUPLE_UINT && session->length == 4;
   if (has_token) token = session->value->uint32;
-  if (starting) {
+  if (starting || (first_update && page == HOME && state < 2)) {
+    page = WORKOUT;
     starting = false;
     notice_until = 0;
   }
@@ -397,7 +609,18 @@ static void inbox(DictionaryIterator *iter, void *context) {
   layer_mark_dirty(display);
 }
 
-static void tick(struct tm *time, TimeUnits units) { layer_mark_dirty(display); }
+static void tick(struct tm *current_time, TimeUnits units) {
+  const time_t clock = time(NULL);
+  if (!sending && page == SENSORS && clock - sensor_request >= 8) {
+    sensor_request = clock;
+    send_command(REQUEST_SENSORS, 0);
+  }
+  if (!sending && page == HISTORY && !history_request) {
+    history_request = clock;
+    send_command(REQUEST_HISTORY, 0);
+  }
+  layer_mark_dirty(display);
+}
 
 int main(void) {
   time_t now;
@@ -416,6 +639,9 @@ int main(void) {
   layer_set_update_proc(display, draw);
   layer_add_child(root, display);
   window_stack_push(window, false);
+  const int cached = persist_read_data(HISTORY_KEY, history, sizeof(history));
+  if (cached > 0 && (size_t)cached <= sizeof(history) && cached % HISTORY_ROW == 0)
+    history_count = cached / HISTORY_ROW;
   app_message_register_inbox_received(inbox);
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
