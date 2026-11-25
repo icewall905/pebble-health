@@ -53,6 +53,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import org.tdgs.ph.data.Intraday
 import org.tdgs.ph.data.Repository
+import org.tdgs.ph.data.overlapsAny
+import org.tdgs.ph.data.watchSessionStats
 import org.tdgs.ph.ui.Fmt
 import org.tdgs.ph.ui.components.Bar
 import org.tdgs.ph.ui.components.BarChart
@@ -109,14 +111,17 @@ fun ActivitiesScreen(repo: Repository, open: (String) -> Unit) {
                     else -> null
                 }, distanceM = distance)
         }
-        val hub = d?.workouts.orEmpty().associateBy { it.id }
+        val hub = d?.workouts.orEmpty().filter { it.supersededBy == null }.associateBy { it.id }
         val localIds = localRows.mapTo(mutableSetOf()) { it.id }
+        // Phone recordings not yet on the hub still hide the watch's auto-detection of the same session.
+        val phoneSpans = localRows.filterNot { hub[it.id]?.ignored == true }.map { it.start to it.start + it.seconds }
         (localRows.map { row -> row.copy(distanceM = row.distanceM ?: hub[row.id]?.distanceM,
                 badge = if (hub[row.id]?.ignored == true) "Removed" else row.badge,
                 removed = hub[row.id]?.ignored == true) } +
-            hub.values.filterNot { it.id in localIds }.map {
+            hub.values.filterNot { it.id in localIds ||
+                    (it.id.startsWith("pebble:") && !it.ignored && overlapsAny(it.start, it.start + it.seconds, phoneSpans)) }.map {
                 ActivityLogRow(it.id, it.kind, it.start, it.activeSeconds ?: it.seconds,
-                    badge = if (it.ignored) "Removed" else if (it.excluded) "Excluded" else if (it.id.startsWith("pebble:")) "Watch" else null,
+                    badge = if (it.ignored) "Removed" else if (it.excluded) "Excluded" else if (it.id.startsWith("pebble:")) "Auto" else null,
                     distanceM = it.distanceM, removed = it.ignored)
             }).sortedByDescending { it.start }
     }
@@ -265,15 +270,38 @@ fun ActivityDetailScreen(repo: Repository, id: String, back: () -> Unit) {
                 if (pts == null) { Loading(120); return@PhCard }
                 val hr = pts.mapNotNull { p -> p.hr?.let { p.ts to it.toDouble() } }
                 val steps = pts.sumOf { it.steps ?: 0 }
-                StatRow("Steps" to Fmt.int(steps), "Avg HR" to Fmt.int(hr.map { it.second }.average().takeIf { hr.isNotEmpty() }),
-                    "Max HR" to Fmt.int(hr.maxOfOrNull { it.second }))
-                StatRow("Cadence" to (if (w.seconds > 0) "${Fmt.int(steps * 60.0 / w.seconds)} spm" else "—"),
-                    "Effort" to (w.rpe?.let { Fmt.dec(it, 0) + "/10" } ?: "—"), "Load" to Fmt.int(w.load))
+                val stats = watchSessionStats(pts, w.start, w.start + w.seconds)
+                val distance = stats.distanceM ?: w.distanceM
+                StatRow("Distance" to Fmt.km(distance),
+                    "Avg pace" to (distance?.takeIf { it > 0 }?.let { paceText(w.seconds * 1000.0 / it) } ?: "—"),
+                    "Steps" to Fmt.int(steps))
+                StatRow("Avg HR" to Fmt.int(hr.map { it.second }.average().takeIf { hr.isNotEmpty() }),
+                    "Max HR" to Fmt.int(hr.maxOfOrNull { it.second }),
+                    "Cadence" to (if (w.seconds > 0) "${Fmt.int(steps * 60.0 / w.seconds)} spm" else "—"))
+                StatRow("Effort" to (w.rpe?.let { Fmt.dec(it, 0) + "/10" } ?: "—"), "Load" to Fmt.int(w.load),
+                    "HR coverage" to (w.hrCoverage?.let { "${Fmt.int(it * 100)}%" } ?: "—"))
+                Note("Detected automatically by the watch. Distance is the watch's step-based estimate. " +
+                    "There is no map because the watch has no GPS; start the workout on the phone to record a route.")
                 if (hr.size >= 2) {
                     Text("Heart rate", style = MaterialTheme.typography.labelSmall, color = m.muted, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
                     TimeLineChart(hr, w.start, w.start + w.seconds, m.heart, height = 160.dp, gapS = 180)
                 } else {
                     Note("No heart rate was recorded during this activity. Turn on \"HR During Activity\" in the watch's Health settings.")
+                }
+                if (stats.pace.size >= 2) {
+                    Text("Pace (min/km)", style = MaterialTheme.typography.labelSmall, color = m.muted, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
+                    // Clamp standing-still minutes so one slow minute does not flatten the chart.
+                    TimeLineChart(stats.pace.map { it.first to minOf(it.second, 1800.0) / 60 }, w.start, w.start + w.seconds, m.steps,
+                        height = 120.dp, gapS = 180, fill = false)
+                }
+                if (stats.splits.isNotEmpty()) {
+                    Text("Splits", style = MaterialTheme.typography.labelSmall, color = m.muted, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
+                    stats.splits.forEachIndexed { i, secs ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                            Text("Km ${i + 1}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Text(paceText(secs), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                 }
                 val perMin = pts.map { Bar(Fmt.clock(it.ts, d.tz), it.steps?.toDouble()) }
                 if (perMin.any { (it.value ?: 0.0) > 0 }) {
@@ -285,3 +313,9 @@ fun ActivityDetailScreen(repo: Repository, id: String, back: () -> Unit) {
     }
 }
 
+
+/** Seconds per km as m:ss /km. */
+private fun paceText(secondsPerKm: Double): String {
+    val total = secondsPerKm.toLong()
+    return "%d:%02d /km".format(total / 60, total % 60)
+}

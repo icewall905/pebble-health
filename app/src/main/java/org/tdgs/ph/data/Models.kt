@@ -76,7 +76,9 @@ data class Observation(val ts: Long, val hr: Int?, val steps: Int?, val snapshot
 data class Workout(val id: String, val start: Long, val seconds: Int, val kind: String, val rpe: Double?,
                    val hrCoverage: Double?, val load: Double?, val excluded: Boolean,
                    val activeSeconds: Int? = null, val distanceM: Double? = null,
-                   val ignored: Boolean = false, val editRevision: Int? = null, val editFingerprint: String? = null)
+                   val ignored: Boolean = false, val editRevision: Int? = null, val editFingerprint: String? = null,
+                   /** Hub id of the phone recording this watch auto-detection duplicates; it is hidden then. */
+                   val supersededBy: String? = null)
 
 data class Battery(val percent: Int?, val lastPercent: Int?, val observedAt: Long?, val status: String?,
                    val runtimeHours: Double?, val series: List<Pair<Long, Int>>)
@@ -323,7 +325,8 @@ data class Dashboard(
             return Workout(id, start, e.int("seconds") ?: 0, e.str("kind") ?: "workout", e.dbl("rpe"),
                 e.dbl("hr_coverage"), e.dbl("load"), e.bool("excluded") == true || (e.int("ignored") ?: 0) != 0,
                 e.int("active_seconds"), e.dbl("distance_m"),
-                e.bool("ignored") == true || (e.int("ignored") ?: 0) != 0, e.int("edit_revision"), e.str("edit_fingerprint"))
+                e.bool("ignored") == true || (e.int("ignored") ?: 0) != 0, e.int("edit_revision"), e.str("edit_fingerprint"),
+                e.str("superseded_by"))
         }
 
         private fun briefing(e: JsonObject?): List<BriefingPage> {
@@ -350,7 +353,8 @@ data class Dashboard(
     }
 }
 
-data class IntradayPoint(val ts: Long, val hr: Int?, val steps: Int?, val active: Int?, val intensity: Double?)
+data class IntradayPoint(val ts: Long, val hr: Int?, val steps: Int?, val active: Int?, val intensity: Double?,
+                         val distanceM: Double? = null)
 
 data class Intraday(
     val date: String,
@@ -369,7 +373,7 @@ data class Intraday(
                 start = o.lng("start") ?: 0,
                 end = o.lng("end") ?: 0,
                 points = o.arr("points").mapNotNull { p ->
-                    p.lng("ts")?.let { IntradayPoint(it, p.int("hr"), p.int("steps"), p.int("active"), p.dbl("intensity")) }
+                    p.lng("ts")?.let { IntradayPoint(it, p.int("hr"), p.int("steps"), p.int("active"), p.dbl("intensity"), p.dbl("distance_m")) }
                 },
                 steps15 = o.arr("steps_15min").mapNotNull { b -> b.lng("ts")?.let { t -> b.int("steps")?.let { t to it } } },
                 sleep = o.arr("sleep").mapNotNull { s ->
