@@ -6,7 +6,8 @@
 // The sport values are indices in the watch's start menu and Android watchSports.
 enum { DETECT_NONE = -1, DETECT_RUN = 0, DETECT_WALK = 1 };
 enum { DETECTION_OFFER = 1, DETECTION_PHONE_RECORDING = 2 };
-enum { DETECTION_SPORT_KEY = 201, DETECTION_OFFER_TIME_KEY = 202 };
+// DETECTION_AUTO_START_KEY absent means on: a detected walk or run starts the phone recording unasked.
+enum { DETECTION_SPORT_KEY = 201, DETECTION_OFFER_TIME_KEY = 202, DETECTION_AUTO_START_KEY = 203 };
 enum { DETECTION_REARM_SECONDS = 120, DETECTION_OFFER_SECONDS = 120 };
 
 typedef struct {

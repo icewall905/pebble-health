@@ -40,7 +40,7 @@ static SimpleMenuItem items[11];
 static unsigned actions[11];
 static SimpleMenuSection section;
 
-enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, MEDIA_COMMAND, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
+enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, MEDIA_COMMAND, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION, TOGGLE_AUTO_START };
 enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT, SETTINGS };
 enum { MEDIA_PREVIOUS = 1, MEDIA_PLAY_PAUSE, MEDIA_NEXT };
 static const char *sports[] = {
@@ -56,6 +56,10 @@ static int detected_sport;
 static bool detection_pending;
 static time_t last_detection_offer;
 static void offer_detection(void);
+
+static bool auto_start(void) {
+  return !persist_exists(DETECTION_AUTO_START_KEY) || persist_read_bool(DETECTION_AUTO_START_KEY);
+}
 
 static void toggle_detection(void) {
   if (app_worker_is_running()) {
@@ -165,6 +169,13 @@ static void select_option(int index, void *context) {
     toggle_detection();
     return;
   }
+  if (action == TOGGLE_AUTO_START) {
+    window_stack_pop(true);
+    const bool on = !auto_start();
+    persist_write_bool(DETECTION_AUTO_START_KEY, on);
+    show_notice(on ? "Auto-start on" : "Will ask first");
+    return;
+  }
   if (menu_type == DETECTED_WORKOUT) {
     if (action == START) send_command(START, detected_sport);
     else if (launch_reason() == APP_LAUNCH_WORKER) window_stack_pop_all(true);
@@ -191,6 +202,7 @@ static void populate_menu(unsigned type) {
     section.title = "Settings";
 #if defined(PBL_HEALTH)
     add_option(app_worker_is_running() ? "Auto-detect: On" : "Auto-detect: Off", TOGGLE_DETECTION);
+    add_option(auto_start() ? "On detect: Start" : "On detect: Ask", TOGGLE_AUTO_START);
 #else
     add_option("No auto-detection", 0);
     items[0].callback = NULL;
@@ -245,6 +257,12 @@ static void offer_detection(void) {
   if (sport != DETECT_RUN && sport != DETECT_WALK) return;
   last_detection_offer = offered;
   detected_sport = sport;
+  if (auto_start()) {
+    // send_command shows "Starting on phone..." and the phone's reply drives the workout screen.
+    vibes_double_pulse();
+    send_command(START, sport);
+    return;
+  }
   populate_menu(DETECTED_WORKOUT);
   if (window_stack_get_top_window() != options_window) window_stack_push(options_window, true);
   vibes_short_pulse();
