@@ -41,7 +41,7 @@ static unsigned actions[11];
 static SimpleMenuSection section;
 
 enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, MEDIA_COMMAND, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION, TOGGLE_AUTO_START };
-enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT, SETTINGS };
+enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, SETTINGS };
 enum { MEDIA_PREVIOUS = 1, MEDIA_PLAY_PAUSE, MEDIA_NEXT };
 static const char *sports[] = {
   "Running", "Walking", "Hiking", "Cycling", "Strength",
@@ -55,6 +55,9 @@ static void open_media(void);
 static int detected_sport;
 static bool detection_pending;
 static time_t last_detection_offer;
+static Window *detected_window;
+static Layer *detected_display;
+static AppTimer *detected_timer;
 static void offer_detection(void);
 
 static bool auto_start(void) {
@@ -176,11 +179,6 @@ static void select_option(int index, void *context) {
     show_notice(on ? "Auto-start on" : "Will ask first");
     return;
   }
-  if (menu_type == DETECTED_WORKOUT) {
-    if (action == START) send_command(START, detected_sport);
-    else if (launch_reason() == APP_LAUNCH_WORKER) window_stack_pop_all(true);
-    return;
-  }
 #endif
   if (action) send_command(action, menu_type == SPORTS ? index : 0);
 }
@@ -220,12 +218,6 @@ static void populate_menu(unsigned type) {
     add_option("Save workout", SAVE);
     add_option("Discard...", OPEN_DISCARD);
     add_option("Keep recording", 0);
-#if defined(PBL_HEALTH)
-  } else if (type == DETECTED_WORKOUT) {
-    section.title = detected_sport == DETECT_RUN ? "Run detected" : "Walk detected";
-    add_option("Start on phone", START);
-    add_option("Dismiss", 0);
-#endif
   } else {
     section.title = "Delete recording?";
     add_option("Keep recording", 0);
@@ -241,8 +233,128 @@ static void populate_menu(unsigned type) {
 }
 
 #if defined(PBL_HEALTH)
+// The prompt is the whole screen rather than a menu: it is raised by the worker while
+// the watchface is showing, so it has to read at a glance. Header band and accent follow
+// the PebbleFit watch apps; white on black on the two-colour platforms.
+#define DETECTED_PROMPT_MS 120000
+
+static bool detected_is_run(void) {
+  return detected_sport == DETECT_RUN;
+}
+
+static GColor detected_accent(void) {
+  return PBL_IF_COLOR_ELSE(detected_is_run() ? GColorFolly : GColorJaegerGreen, GColorWhite);
+}
+
+static void detected_draw(Layer *layer, GContext *ctx) {
+  const GRect bounds = layer_get_bounds(layer);
+  const int w = bounds.size.w, h = bounds.size.h;
+  const bool round = PBL_IF_ROUND_ELSE(true, false);
+  const char *header = detected_is_run() ? "RUN DETECTED" : "WALK DETECTED";
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+
+  int text_top, inset, pill_h, pill_y, pill_gap;
+  const char *pill_font;
+  if (round) {
+    // Round screens have no room for a full-width band or wide pills: a short accent
+    // caption, a wrapping title, and narrower pills set well inside the circle.
+    inset = 30;
+    pill_font = FONT_KEY_GOTHIC_14_BOLD;
+    pill_h = 28;
+    pill_y = h - 58;
+    pill_gap = 6;
+    graphics_context_set_text_color(ctx, detected_accent());
+    graphics_draw_text(ctx, detected_is_run() ? "RUN" : "WALK",
+        fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GRect(inset, 10, w - inset * 2, 18),
+        GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+    text_top = 34;
+  } else {
+    inset = 6;
+    pill_font = FONT_KEY_GOTHIC_18_BOLD;
+    pill_h = 30;
+    pill_y = h - pill_h - 8;
+    pill_gap = 8;
+    graphics_context_set_fill_color(ctx, detected_accent());
+    graphics_fill_rect(ctx, GRect(0, 0, w, 30), 0, GCornerNone);
+    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+    graphics_draw_text(ctx, header, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+        GRect(inset, 5, w - inset * 2, 24), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+    text_top = (30 + h - 44 - 58) / 2;
+  }
+
+  // Centre the message between the header and the buttons, wrapping rather than truncating.
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, "Start on phone?", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+      GRect(inset, text_top, w - inset * 2, round ? 58 : 34), GTextOverflowModeWordWrap,
+      GTextAlignmentCenter, NULL);
+  graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+  graphics_draw_text(ctx, "GPS, strap, map", fonts_get_system_font(FONT_KEY_GOTHIC_18),
+      GRect(inset, text_top + (round ? 56 : 32), w - inset * 2, 24),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+
+  const int pill_w = (w - inset * 2 - pill_gap) / 2;
+  const GRect dismiss = GRect(inset, pill_y, pill_w, pill_h);
+  const GRect start = GRect(inset + pill_w + pill_gap, pill_y, pill_w, pill_h);
+  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_round_rect(ctx, dismiss, 6);
+  graphics_context_set_fill_color(ctx, detected_accent());
+  graphics_fill_rect(ctx, start, 6, GCornersAll);
+  const int text_y = pill_y + (pill_h - 16) / 2;
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, "Not now", fonts_get_system_font(pill_font),
+      GRect(dismiss.origin.x, text_y, pill_w, 18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  graphics_draw_text(ctx, "Start", fonts_get_system_font(pill_font),
+      GRect(start.origin.x, text_y, pill_w, 18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+}
+
+
+static void close_detected(bool exit_app) {
+  if (detected_timer) {
+    app_timer_cancel(detected_timer);
+    detected_timer = NULL;
+  }
+  if (window_stack_contains_window(detected_window)) window_stack_remove(detected_window, true);
+  if (exit_app) window_stack_pop_all(true);
+}
+
+static void detected_expired(void *context) {
+  detected_timer = NULL;
+  // Nothing chosen in time: leave the watchface be, the built-in logging still runs.
+  if (window_stack_contains_window(detected_window))
+    close_detected(launch_reason() == APP_LAUNCH_WORKER);
+}
+
+static void detected_accept(ClickRecognizerRef recognizer, void *context) {
+  const int sport = detected_sport;
+  close_detected(false);
+  send_command(START, sport);
+}
+
+static void detected_dismiss(ClickRecognizerRef recognizer, void *context) {
+  close_detected(launch_reason() == APP_LAUNCH_WORKER);
+}
+
+static void detected_click_config(void *context) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, detected_accept);
+  window_single_click_subscribe(BUTTON_ID_BACK, detected_dismiss);
+}
+
+static void create_detected_window(void) {
+  detected_window = window_create();
+  window_set_background_color(detected_window, GColorBlack);
+  window_set_click_config_provider(detected_window, detected_click_config);
+  Layer *root = window_get_root_layer(detected_window);
+  detected_display = layer_create(layer_get_bounds(root));
+  layer_set_update_proc(detected_display, detected_draw);
+  layer_add_child(root, detected_display);
+}
+
 static void offer_detection(void) {
-  if (window_stack_contains_window(utilities_window)) {
+  if (window_stack_contains_window(utilities_window) || window_stack_contains_window(options_window) ||
+      window_stack_contains_window(detected_window)) {
     detection_pending = true;
     return;
   }
@@ -263,9 +375,11 @@ static void offer_detection(void) {
     send_command(START, sport);
     return;
   }
-  populate_menu(DETECTED_WORKOUT);
-  if (window_stack_get_top_window() != options_window) window_stack_push(options_window, true);
-  vibes_short_pulse();
+  layer_mark_dirty(detected_display);
+  if (!window_stack_contains_window(detected_window)) window_stack_push(detected_window, true);
+  vibes_long_pulse();
+  light_enable_interaction();
+  if (!detected_timer) detected_timer = app_timer_register(DETECTED_PROMPT_MS, detected_expired, NULL);
 }
 
 static void detection_message(uint16_t type, AppWorkerMessage *message) {
@@ -865,8 +979,7 @@ static void inbox(DictionaryIterator *iter, void *context) {
     AppWorkerMessage message = { .data0 = state < 2 };
     app_worker_send_message(DETECTION_PHONE_RECORDING, &message);
   }
-  if (state < 2 && menu_type == DETECTED_WORKOUT &&
-      window_stack_get_top_window() == options_window) window_stack_pop(true);
+  if (state < 2 && window_stack_contains_window(detected_window)) close_detected(false);
 #endif
   layer_mark_dirty(display);
 }
@@ -897,6 +1010,9 @@ int main(void) {
   window = window_create();
   options_window = window_create();
   create_utilities();
+#if defined(PBL_HEALTH)
+  create_detected_window();
+#endif
   window_set_click_config_provider(window, click_config);
   window_set_background_color(window, GColorBlack);
   Layer *root = window_get_root_layer(window);
@@ -927,6 +1043,11 @@ int main(void) {
   app_message_deregister_callbacks();
   if (options) simple_menu_layer_destroy(options);
   window_destroy(options_window);
+#if defined(PBL_HEALTH)
+  if (detected_timer) app_timer_cancel(detected_timer);
+  layer_destroy(detected_display);
+  window_destroy(detected_window);
+#endif
   simple_menu_layer_destroy(utilities);
   window_destroy(utilities_window);
   layer_destroy(display);

@@ -108,6 +108,13 @@ or strength rest and repeat-set, and finishing or discarding. Discard requires a
 second confirmation and deletes the unsaved recording. If Android blocks an
 unprepared start, tap the start notification to open the workout on your phone.
 
+A watch-started recording runs without the screen. The phone holds a wake lock only while
+recording, so GPS, chest-strap heart rate, checkpoints and the watch stats keep flowing with
+the screen off, and a locked screen never ends a recording. The app declares the companion
+device background permissions, which lets the recording start while Pebble Health is in the
+background. If a phone still refuses that start, the notification carries **Start** and
+**Not now** buttons that work from the lock screen.
+
 To open the live phone display automatically, tap **Enable auto-open live display**
 under **Record workout** and allow **Display over other apps** in Android settings.
 This applies when you pick a sport or accept an automatic walk or run prompt on the
@@ -144,8 +151,12 @@ to open **Menu**. Choose **Settings → Auto-detect: Off** to turn on prompts. P
 allows one background worker at a time, so the watch may ask you to replace the current
 one. After PebbleOS recognizes
 an ongoing walk or run, the watch opens a prompt to start a phone recording or dismiss it.
-Dismissal leaves the built-in activity logging and GravelEx sync alone. To start from the
-prompt while the phone is locked, use **Ready for watch start** as described above.
+The prompt takes the whole screen: **Select** starts the recording and **Back** dismisses
+it. It closes on its own after two minutes, which leaves the built-in activity logging
+alone. When the phone cannot start the recording directly, the same request appears there
+as a notification with **Start** and **Not now** buttons. Dismissal leaves the built-in
+activity logging and GravelEx sync alone. To start from the prompt while the phone is
+locked, use **Ready for watch start** as described above.
 
 ### Live map and watch stats
 

@@ -20,6 +20,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.*
 import java.util.UUID
@@ -78,6 +79,13 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private val restWakeLock by lazy {
         getSystemService(PowerManager::class.java).newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK, "$packageName:strength-rest"
+        ).apply { setReferenceCounted(false) }
+    }
+    // Recording keeps a partial wake lock so fixes, strap heart rate, checkpoints and the
+    // watch mirror keep running while the phone's screen is off or the phone is in a pocket.
+    private val recordWakeLock by lazy {
+        getSystemService(PowerManager::class.java).newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK, "$packageName:workout-recording"
         ).apply { setReferenceCounted(false) }
     }
 
@@ -273,7 +281,10 @@ internal class WorkoutRecorder : Service(), LocationListener {
             }).also { it.connect() }
         }
         handler.post(ticker)
-        if (fromWatch && !phoneDisplayOpen) {
+        recordWakeLock.acquire(MAX_ACTIVE_MS + 60_000L)
+        if (fromWatch && !phoneDisplayOpen && Settings.canDrawOverlays(this)) {
+            // Only a granted overlay permission lets a background service open the live
+            // display; without it the recording still runs and the notification opens it.
             runCatching { startActivity(WatchWorkoutCommands.phoneIntent(this)) }
         }
     }
@@ -389,6 +400,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
         strapPulse = null
         watchPulse = null
         runCatching { location.removeUpdates(this) }
+        // Nothing to integrate while paused: let the phone sleep until the user resumes.
+        if (recordWakeLock.isHeld) recordWakeLock.release()
         if (persist { store.checkpoint(state.workout.id, wallTime(), accumulated) }) {
             live.value = state.copy(active = accumulated, paused = true, bpm = null, heartFromWatch = false, requestWatchHeart = false, livePace = null, gpsStatus = if (wantsGps) "GPS paused" else "")
         }
@@ -397,6 +410,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
     private fun resume() {
         val state = live.value?.takeIf { it.paused } ?: return
         runStart = SystemClock.elapsedRealtime()
+        recordWakeLock.acquire(MAX_ACTIVE_MS + 60_000L)
         live.value = state.copy(paused = false)
         requestGps()
     }
@@ -450,6 +464,7 @@ internal class WorkoutRecorder : Service(), LocationListener {
         runCatching { location.removeUpdates(this) }
         strap?.close()
         strap = null
+        if (recordWakeLock.isHeld) recordWakeLock.release()
         live.value = null
         armed.value = false
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -16,6 +16,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Companion-app permissions: the watch asks for a recording while the phone is
+         locked and this app is in the background, which Android otherwise blocks. -->
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
 
     <application
         android:name=".PhApp"
@@ -58,10 +62,13 @@
             </intent-filter>
         </service>
         <service android:name=".workout.WorkoutRecorder" android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="location|connectedDevice|specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-started workout timing for indoor workouts without GPS or Bluetooth sensors" />
         </service>
+
+        <receiver android:name=".workout.WorkoutPromptDismissed" android:exported="false" />
 
         <receiver
             android:name=".widget.TodayWidgetReceiver"
