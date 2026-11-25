@@ -126,9 +126,10 @@ press **Up** again for the workout display.
 **Down** opens **Menu** from home, live stats or a workout. **History** shows the eight most
 recent phone and synced dashboard activities. Scroll with **Up** and **Down**, and use
 **Select** to see an entry's details. The last fetched list is available if the phone is
-out of range. **Media Control** sends next, play/pause and previous to the Android phone's
-media player over PebbleKit 2. Open your media player on the phone before using these
-controls. From home, **Select** opens the sport picker or controls for the recording
+out of range. In **Media Control**, press **Up** for the previous track, **Select** to play
+or pause, and **Down** for the next track. **Back** returns to the menu. These controls
+use the Android phone's media player over PebbleKit 2. Open the player on your phone
+first. From home, **Select** opens the sport picker or controls for the recording
 in progress.
 
 ### Automatic walk and run prompts

@@ -4,9 +4,11 @@
 enum { ELAPSED, DISTANCE, PACE, HEART, STATE, ZONE, BATTERY, MAX_HEART, MODE, COUNT, REST, TITLE, TOKEN };
 static Window *window;
 static Layer *display;
-#if defined(PBL_COLOR)
-static GBitmap *workout_mark;
-#endif
+static Window *media_window;
+static Layer *media_display;
+static const char *media_notice;
+static time_t media_notice_until;
+static unsigned media_selected;
 static uint32_t elapsed, meters, pace, heart, state, zone, battery, max_heart;
 static uint32_t mode, count, rest;
 static char title[32];
@@ -39,7 +41,7 @@ static unsigned actions[11];
 static SimpleMenuSection section;
 
 enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, MEDIA_COMMAND, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
-enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT, SETTINGS, MEDIA };
+enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT, SETTINGS };
 enum { MEDIA_PREVIOUS = 1, MEDIA_PLAY_PAUSE, MEDIA_NEXT };
 static const char *sports[] = {
   "Running", "Walking", "Hiking", "Cycling", "Strength",
@@ -48,6 +50,7 @@ static const char *sports[] = {
 static unsigned menu_type;
 static void show_notice(const char *message);
 static void media_status(const char *message);
+static void open_media(void);
 #if defined(PBL_HEALTH)
 static int detected_sport;
 static bool detection_pending;
@@ -139,9 +142,9 @@ static void on_watch_heart(HealthEventType event, void *context) {
 static void populate_menu(unsigned type);
 
 static void media_status(const char *message) {
-  if (menu_type != MEDIA || window_stack_get_top_window() != options_window) return;
-  section.title = message;
-  layer_mark_dirty(simple_menu_layer_get_layer(options));
+  media_notice = message;
+  media_notice_until = time(NULL) + 3;
+  layer_mark_dirty(media_display);
 }
 
 static void show_submenu(void *type) {
@@ -150,13 +153,6 @@ static void show_submenu(void *type) {
 
 static void select_option(int index, void *context) {
   unsigned action = actions[index];
-  if (menu_type == MEDIA) {
-    if (!sending) {
-      media_status("Media control");
-      send_command(MEDIA_COMMAND, action);
-    }
-    return;
-  }
   if (action == OPEN_FINISH || action == OPEN_DISCARD) {
     const uintptr_t type = action == OPEN_FINISH ? END_WORKOUT : CONFIRM_DISCARD;
     app_timer_register(1, show_submenu, (void *)type);
@@ -199,11 +195,6 @@ static void populate_menu(unsigned type) {
     add_option("No auto-detection", 0);
     items[0].callback = NULL;
 #endif
-  } else if (type == MEDIA) {
-    section.title = "Media control";
-    add_option("Next track", MEDIA_NEXT);
-    add_option("Play / pause", MEDIA_PLAY_PAUSE);
-    add_option("Previous track", MEDIA_PREVIOUS);
   } else if (type == CONTROLS) {
     section.title = "Workout controls";
     add_option(state == 1 ? "Resume" : "Pause", state == 1 ? RESUME : PAUSE);
@@ -295,9 +286,11 @@ static void select_utility(int index, void *context) {
     history_request = 0;
     history_answered = false;
     layer_mark_dirty(display);
-  } else {
-    populate_menu(index == 1 ? SETTINGS : MEDIA);
+  } else if (index == 1) {
+    populate_menu(SETTINGS);
     window_stack_push(options_window, true);
+  } else {
+    open_media();
   }
 }
 
@@ -366,6 +359,7 @@ static void click_config(void *context) {
 static void outbox_sent(DictionaryIterator *iter, void *context) {
   sending = false;
   if (pending_command == START && starting) show_notice("Waiting for recording");
+  if (pending_command == MEDIA_COMMAND) media_status("Sent to phone");
 }
 
 static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
@@ -384,13 +378,113 @@ static void label(GContext *ctx, const char *text, const char *font, GRect bound
       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
+static int clock_bottom(void) {
+  return PBL_IF_ROUND_ELSE(49, 43);
+}
+
 static void draw_clock(GContext *ctx, int w) {
-  char clock[12];
-  clock_copy_time_string(clock, sizeof(clock));
-  const int right = PBL_IF_ROUND_ELSE(w * 3 / 4, w - 4);
-  const int top = PBL_IF_ROUND_ELSE(11, 0);
-  graphics_draw_text(ctx, clock, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-      GRect(right - 56, top, 56, 16), GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  const time_t now = time(NULL);
+  const struct tm *local = localtime(&now);
+  if (!local) return;
+
+  const bool is_24h = clock_is_24h_style();
+  char digits[6];
+  const int hour = is_24h ? local->tm_hour : (local->tm_hour + 11) % 12 + 1;
+  snprintf(digits, sizeof(digits), is_24h ? "%02d:%02d" : "%d:%02d", hour, local->tm_min);
+  const GFont font = fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD);
+  const int digits_width = graphics_text_layout_get_content_size(digits, font, GRect(0, 0, w, 48),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft).w;
+  const int suffix_width = is_24h ? 0 : 21;
+  const int width = digits_width + suffix_width;
+  const int x = PBL_IF_ROUND_ELSE((w - digits_width) / 2, w - width - 5);
+  const int y = PBL_IF_ROUND_ELSE(6, -1);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, digits, font, GRect(x, y, digits_width + 1, 50),
+      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  if (!is_24h) {
+    const int suffix_x = PBL_IF_ROUND_ELSE(w * 3 / 4 + 6, x + digits_width + 2);
+    const int suffix_y = y + PBL_IF_ROUND_ELSE(29, 24);
+    label(ctx, local->tm_hour < 12 ? "AM" : "PM", FONT_KEY_GOTHIC_14_BOLD,
+        GRect(suffix_x, suffix_y, suffix_width, 17));
+  }
+}
+
+static void media_key(ClickRecognizerRef recognizer, void *context) {
+  if (sending) {
+    if (pending_command != MEDIA_COMMAND) media_status("Try again");
+    return;
+  }
+  const ButtonId button = click_recognizer_get_button_id(recognizer);
+  media_selected = button == BUTTON_ID_UP ? MEDIA_PREVIOUS :
+      button == BUTTON_ID_DOWN ? MEDIA_NEXT : MEDIA_PLAY_PAUSE;
+  media_status("Sending…");
+  send_command(MEDIA_COMMAND, media_selected);
+}
+
+static void media_click_config(void *context) {
+  window_single_click_subscribe(BUTTON_ID_UP, media_key);
+  window_single_click_subscribe(BUTTON_ID_SELECT, media_key);
+  window_single_click_subscribe(BUTTON_ID_DOWN, media_key);
+}
+
+static void transport_symbol(GContext *ctx, int x, int y, unsigned action) {
+  if (action == MEDIA_PLAY_PAUSE) {
+    graphics_fill_rect(ctx, GRect(x + 1, y - 7, 3, 14), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(x + 6, y - 7, 3, 14), 0, GCornerNone);
+    x -= 5;
+  }
+  const int direction = action == MEDIA_PREVIOUS ? -1 : 1;
+  GPoint points[] = { GPoint(x - 5 * direction, y - 7), GPoint(x + 5 * direction, y),
+                     GPoint(x - 5 * direction, y + 7) };
+  GPath path = { .num_points = ARRAY_LENGTH(points), .points = points };
+  gpath_draw_filled(ctx, &path);
+  if (action != MEDIA_PLAY_PAUSE)
+    graphics_fill_rect(ctx, GRect(x + (direction == 1 ? 5 : -7), y - 7, 2, 14), 0, GCornerNone);
+}
+
+static void draw_media(Layer *layer, GContext *ctx) {
+  const GSize size = layer_get_bounds(layer).size;
+  const int w = size.w, h = size.h;
+  draw_clock(ctx, w);
+  label(ctx, "Media control", FONT_KEY_GOTHIC_24_BOLD, GRect(0, clock_bottom(), w, 28));
+  const int y = h * 58 / 100;
+  const unsigned actions[] = { MEDIA_PREVIOUS, MEDIA_PLAY_PAUSE, MEDIA_NEXT };
+  const char *buttons[] = { "Up", "Select", "Down" };
+  const bool feedback = media_notice && time(NULL) < media_notice_until;
+  for (unsigned i = 0; i < ARRAY_LENGTH(actions); ++i) {
+    const int x = w / 2 + ((int)i - 1) * PBL_IF_ROUND_ELSE(w * 27 / 100, w * 3 / 10);
+    const bool center = actions[i] == MEDIA_PLAY_PAUSE;
+    const bool selected = feedback && media_selected == actions[i];
+    const int radius = center ? 21 : 16;
+    if (center || selected) {
+      graphics_context_set_fill_color(ctx, center ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) :
+          PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorWhite));
+      graphics_fill_circle(ctx, GPoint(x, y), radius);
+    } else {
+      graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+      graphics_draw_circle(ctx, GPoint(x, y), radius);
+    }
+    graphics_context_set_fill_color(ctx, center ? GColorBlack :
+        selected ? PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack) : GColorWhite);
+    transport_symbol(ctx, x, y, actions[i]);
+    label(ctx, buttons[i], FONT_KEY_GOTHIC_18_BOLD, GRect(x - 24, y + 25, 48, 23));
+  }
+  if (feedback)
+    label(ctx, media_notice, FONT_KEY_GOTHIC_14_BOLD, GRect(w / 8, h - PBL_IF_ROUND_ELSE(25, 19), w * 3 / 4, 17));
+}
+
+static void open_media(void) {
+  media_notice = NULL;
+  if (!media_window) {
+    media_window = window_create();
+    window_set_background_color(media_window, GColorBlack);
+    window_set_click_config_provider(media_window, media_click_config);
+    Layer *root = window_get_root_layer(media_window);
+    media_display = layer_create(layer_get_bounds(root));
+    layer_set_update_proc(media_display, draw_media);
+    layer_add_child(root, media_display);
+  }
+  window_stack_push(media_window, true);
 }
 
 static void panel(GContext *ctx, GRect box, bool emphasized) {
@@ -462,40 +556,37 @@ static void draw_strength(GContext *ctx, int w, int h, bool live,
   int inset = PBL_IF_ROUND_ELSE(w / 6, w / 10);
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRajah, GColorWhite));
   label(ctx, title[0] ? title : "Strength", PBL_IF_ROUND_ELSE(FONT_KEY_GOTHIC_14_BOLD, FONT_KEY_GOTHIC_18_BOLD),
-      GRect(inset, PBL_IF_ROUND_ELSE(23, h * 8 / 100), w - 2 * inset, 20));
+      GRect(inset, clock_bottom(), w - 2 * inset, 20));
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   snprintf(text, sizeof(text), "%s  /  %lu %s", clock, (unsigned long)count, count == 1 ? "set" : "sets");
-  label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 18 / 100, w, 24));
+  label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, clock_bottom() + 17, w, 22));
 
   bool resting = live && rest > 0 && rest < 601;
   bool complete = live && rest == 601;
-  int panel_top = h * 28 / 100;
-  panel(ctx, GRect(inset, panel_top, w - 2 * inset, h * 68 / 100 - panel_top), resting || complete);
+  int panel_top = clock_bottom() + 39;
+  panel(ctx, GRect(inset, panel_top, w - 2 * inset, 49), resting || complete);
   if (resting || complete) {
     time_t age = time(NULL) - received;
     unsigned left = resting && age >= 0 && (uint32_t)age < rest ? rest - (uint32_t)age : 0;
     snprintf(text, sizeof(text), "%u:%02u", left / 60, left % 60);
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(left ? GColorElectricBlue : GColorMintGreen, GColorWhite));
-    label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
-    label(ctx, left ? "Rest" : "Rest complete", FONT_KEY_GOTHIC_18_BOLD,
-        GRect(0, h * 57 / 100, w, 24));
-    graphics_context_set_text_color(ctx, active_zone ? zone_color(active_zone - 1) : GColorWhite);
-    if (heart) snprintf(text, sizeof(text), "%lu bpm", (unsigned long)heart);
-    else snprintf(text, sizeof(text), "-- bpm");
-    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 69 / 100, w, 20));
+    label(ctx, text, FONT_KEY_GOTHIC_28_BOLD, GRect(0, panel_top - 1, w, 34));
+    if (heart) snprintf(text, sizeof(text), "%s · %lu bpm", left ? "Rest" : "Ready", (unsigned long)heart);
+    else snprintf(text, sizeof(text), "%s", left ? "Rest" : "Rest complete");
+    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, panel_top + 27, w, 22));
   } else {
     graphics_context_set_text_color(ctx, active_zone ? zone_color(active_zone - 1) : GColorWhite);
     if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
     else snprintf(text, sizeof(text), "--");
-    label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 29 / 100, w, 50));
+    label(ctx, text, FONT_KEY_GOTHIC_28_BOLD, GRect(0, panel_top - 1, w, 34));
     if (status) snprintf(text, sizeof(text), "%s", status);
     else if (active_zone > 1) snprintf(text, sizeof(text), "%s  /  Zone %u", wrist_requested ? "Watch bpm" : "bpm", active_zone - 1);
     else if (active_zone == 1) snprintf(text, sizeof(text), "%s  /  Below Z1", wrist_requested ? "Watch bpm" : "bpm");
     else if (live && heart && wrist_requested) snprintf(text, sizeof(text), "Watch bpm");
     else snprintf(text, sizeof(text), "Heart rate");
-    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 57 / 100, w, 24));
+    label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, panel_top + 27, w, 22));
   }
-  draw_gauge(ctx, inset, h * 78 / 100, w - 2 * inset, active_zone);
+  draw_gauge(ctx, inset, h - PBL_IF_ROUND_ELSE(38, 31), w - 2 * inset, active_zone);
 }
 
 static void home_row(GContext *ctx, int w, int y, const char *button, const char *name, bool primary) {
@@ -511,17 +602,9 @@ static void home_row(GContext *ctx, int w, int y, const char *button, const char
 }
 
 static void draw_home(GContext *ctx, int w, int h) {
-#if defined(PBL_COLOR)
-  if (workout_mark) {
-    graphics_context_set_compositing_mode(ctx, GCompOpSet);
-    graphics_draw_bitmap_in_rect(ctx, workout_mark, GRect((w - 25) / 2, h / 18, 25, 25));
-  }
-#endif
-  const char *font = h >= 200 ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD;
-  label(ctx, "Pebble Health", font, GRect(0, h * 18 / 100, w, 34));
-  label(ctx, "Workout", font, GRect(0, h * 31 / 100, w, 34));
-  const int top = h * 51 / 100;
-  const int gap = h < 180 ? 26 : (h - top - 26) / 2 - 4;
+  label(ctx, "Pebble Health", FONT_KEY_GOTHIC_28_BOLD, GRect(0, clock_bottom() + 2, w, 34));
+  const int top = h * 47 / 100;
+  const int gap = PBL_IF_ROUND_ELSE(25, (h - top - 29) / 2);
   home_row(ctx, w, top, "Up", "Live stats", false);
   home_row(ctx, w, top + gap, "Select", "Workouts", true);
   home_row(ctx, w, top + 2 * gap, "Down", "Menu", false);
@@ -541,14 +624,13 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   const char *gps_text[] = {"GPS off", "GPS ready", "Finding GPS…", "GPS fix", "GPS paused", "GPS unavailable"};
   char text[32];
 
-  label(ctx, "Live stats", FONT_KEY_GOTHIC_24_BOLD, GRect(0, PBL_IF_ROUND_ELSE(24, 13), w, 32));
-  if (bpm) snprintf(text, sizeof(text), "%u", bpm);
-  else snprintf(text, sizeof(text), "--");
+  if (bpm) snprintf(text, sizeof(text), "%u bpm", bpm);
+  else snprintf(text, sizeof(text), "-- bpm");
   graphics_context_set_text_color(ctx, bpm ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
-  label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 20 / 100, w, 48));
+  label(ctx, text, FONT_KEY_GOTHIC_28_BOLD, GRect(0, clock_bottom() + 1, w, 34));
   graphics_context_set_text_color(ctx, GColorWhite);
-  label(ctx, wrist_preview ? "Watch bpm" : bpm ? "bpm" : wrist_sampling ? "Reading wrist…" : "Wrist HR unavailable",
-      FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 22));
+  label(ctx, wrist_preview ? "Watch heart rate" : bpm ? "Heart rate" : wrist_sampling ? "Reading wrist…" : "Wrist HR unavailable",
+      FONT_KEY_GOTHIC_18, GRect(0, clock_bottom() + 31, w, 22));
   if (linked && strap < 6) {
     int inset = PBL_IF_ROUND_ELSE(w / 7, 10);
     int strap_top = h * 58 / 100, gps_top = h * 72 / 100;
@@ -586,7 +668,7 @@ static void history_date(const uint8_t *row, char *out, size_t size, const char 
 
 static void draw_history(GContext *ctx, int w, int h) {
   int inset = PBL_IF_ROUND_ELSE(w / 8, 8);
-  label(ctx, "History", FONT_KEY_GOTHIC_24_BOLD, GRect(0, PBL_IF_ROUND_ELSE(23, 12), w, 34));
+  label(ctx, "History", FONT_KEY_GOTHIC_24_BOLD, GRect(0, clock_bottom(), w, 30));
   if (!history_count) {
     const char *message = history_answered ? "No saved workouts" :
         history_request && time(NULL) - history_request <= 8 ? "Loading workouts…" : "Open Pebble Health";
@@ -599,42 +681,43 @@ static void draw_history(GContext *ctx, int w, int h) {
     const uint8_t *row = history + history_selection * HISTORY_ROW;
     unsigned sport = row[0];
     const char *name = sport < ARRAY_LENGTH(sports) ? sports[sport] : "Workout";
-    label(ctx, name, FONT_KEY_GOTHIC_28_BOLD, GRect(0, h * 26 / 100, w, 35));
+    label(ctx, name, FONT_KEY_GOTHIC_28_BOLD, GRect(0, h * 39 / 100, w, 31));
     history_date(row, date, sizeof(date), "%d %b %H:%M");
-    label(ctx, date, FONT_KEY_GOTHIC_18, GRect(0, h * 45 / 100, w, 25));
+    label(ctx, date, FONT_KEY_GOTHIC_18, GRect(0, h * 56 / 100, w, 25));
     history_duration(history_value(row + 5), duration, sizeof(duration));
-    label(ctx, duration, FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 60 / 100, w, 31));
+    label(ctx, duration, FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 66 / 100, w, 29));
     uint32_t distance = history_value(row + 9);
     if (distance != UINT32_MAX) {
       snprintf(text, sizeof(text), "%lu.%02lu km", (unsigned long)(distance / 1000),
           (unsigned long)(distance % 1000 / 10));
-      label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 79 / 100, w, 25));
+      label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 81 / 100, w, 21));
     }
     return;
   }
 
   unsigned first = history_selection > 1 ? history_selection - 1 : 0;
   if (history_count > 3 && first > history_count - 3) first = history_count - 3;
-  int row_h = (h * 64 / 100) / 3;
+  const int list_top = clock_bottom() + 29;
+  const int row_h = (h - list_top - PBL_IF_ROUND_ELSE(25, 17)) / 3;
   for (unsigned i = first; i < first + 3 && i < history_count; i++) {
     const uint8_t *row = history + i * HISTORY_ROW;
     unsigned sport = row[0];
-    int y = h * 22 / 100 + (i - first) * row_h;
+    int y = list_top + (i - first) * row_h;
     bool selected = i == history_selection;
     graphics_context_set_fill_color(ctx, selected ? PBL_IF_COLOR_ELSE(GColorMidnightGreen, GColorWhite) :
         PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorBlack));
     graphics_fill_rect(ctx, GRect(inset, y, w - 2 * inset, row_h - 3), 5, GCornersAll);
     if (selected) graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorMintGreen, GColorBlack));
     label(ctx, sport < ARRAY_LENGTH(sports) ? sports[sport] : "Workout", FONT_KEY_GOTHIC_18_BOLD,
-        GRect(inset, y, w - 2 * inset, 21));
+        GRect(inset, y - 1, w - 2 * inset, 19));
     history_date(row, date, sizeof(date), "%d %b");
     history_duration(history_value(row + 5), duration, sizeof(duration));
     snprintf(text, sizeof(text), "%s  /  %s", date, duration);
-    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(inset, y + 17, w - 2 * inset, 18));
+    label(ctx, text, FONT_KEY_GOTHIC_14, GRect(inset, y + 12, w - 2 * inset, 17));
     graphics_context_set_text_color(ctx, GColorWhite);
   }
   snprintf(text, sizeof(text), "%u / %u%s", history_selection + 1, history_count, history_answered ? "" : "  ·  Cached");
-  label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, h * 87 / 100, w, 18));
+  label(ctx, text, FONT_KEY_GOTHIC_14, GRect(0, list_top + 3 * row_h, w, 17));
 }
 
 static void draw(Layer *layer, GContext *ctx) {
@@ -664,7 +747,7 @@ static void draw(Layer *layer, GContext *ctx) {
     return;
   }
   snprintf(text, sizeof(text), "%s%s%s", time, status ? "  " : "", status ? status : "");
-  const int banner_top = PBL_IF_ROUND_ELSE(24, 15);
+  const int banner_top = clock_bottom() + 1;
   panel(ctx, GRect(w / 8, banner_top, w * 3 / 4, 22), live);
   graphics_context_set_text_color(ctx, live ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, banner_top - 1, w, 23));
@@ -672,19 +755,19 @@ static void draw(Layer *layer, GContext *ctx) {
   if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
   else snprintf(text, sizeof(text), "--");
   graphics_context_set_text_color(ctx, active ? zone_color(active - 1) : GColorWhite);
-  label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, banner_top + 17, w, 50));
+  label(ctx, text, FONT_KEY_GOTHIC_28_BOLD, GRect(0, banner_top + 18, w, 34));
   if (active > 1) snprintf(text, sizeof(text), "%s  /  Zone %u", wrist_requested ? "Watch bpm" : "bpm", active - 1);
   else if (active == 1) snprintf(text, sizeof(text), "%s  /  Below Z1", wrist_requested ? "Watch bpm" : "bpm");
   else if (live && heart && wrist_requested) snprintf(text, sizeof(text), "Watch bpm");
   else if (live && heart) snprintf(text, sizeof(text), "bpm  /  Set max HR");
   else snprintf(text, sizeof(text), "Heart rate");
-  label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, h * 43 / 100, w, 23));
+  label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, banner_top + 41, w, 23));
 
-  draw_gauge(ctx, w / 10, h * 56 / 100, w - 2 * (w / 10), active);
-  int left = PBL_IF_ROUND_ELSE(w / 8, 7);
+  draw_gauge(ctx, w / 10, banner_top + 62, w - 2 * (w / 10), active);
+  int left = PBL_IF_ROUND_ELSE(w * 18 / 100, 7);
   int metric_width = w / 2 - left - 2;
-  int metric_top = h * 73 / 100;
-  int metric_height = h >= 200 ? 36 : 31;
+  int metric_top = PBL_IF_ROUND_ELSE(h - 41, h >= 200 ? h * 73 / 100 : h - 32);
+  int metric_height = PBL_IF_ROUND_ELSE(29, h >= 200 ? 36 : 31);
   if (mode == 3) {
     snprintf(text, sizeof(text), "%lu %s", (unsigned long)count, count == 1 ? "lap" : "laps");
     metric_card(ctx, GRect(left, metric_top, w - 2 * left, metric_height), title[0] ? title : "Workout", text);
@@ -785,6 +868,7 @@ static void tick(struct tm *current_time, TimeUnits units) {
     send_command(REQUEST_HISTORY, 0);
   }
   layer_mark_dirty(display);
+  if (media_display) layer_mark_dirty(media_display);
 }
 
 int main(void) {
@@ -792,9 +876,6 @@ int main(void) {
   uint16_t millis;
   time_ms(&now, &millis);
   sequence = (uint32_t)now * 1000 + millis;
-#if defined(PBL_COLOR)
-  workout_mark = gbitmap_create_with_resource(RESOURCE_ID_WORKOUT_MARK);
-#endif
   window = window_create();
   options_window = window_create();
   create_utilities();
@@ -832,7 +913,8 @@ int main(void) {
   window_destroy(utilities_window);
   layer_destroy(display);
   window_destroy(window);
-#if defined(PBL_COLOR)
-  if (workout_mark) gbitmap_destroy(workout_mark);
-#endif
+  if (media_window) {
+    layer_destroy(media_display);
+    window_destroy(media_window);
+  }
 }
