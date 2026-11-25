@@ -8,7 +8,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
+import android.provider.Settings
+import android.view.KeyEvent
 import io.rebble.pebblekit2.client.BasePebbleListenerService
 import io.rebble.pebblekit2.client.DefaultPebbleAndroidAppPicker
 import io.rebble.pebblekit2.client.DefaultPebbleSender
@@ -65,9 +68,30 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
             lastAccepted = request
             return ReceiveResult.Ack
         }
+        if (command == 12u) {
+            val key = when (argument) {
+                1u -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                2u -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                3u -> KeyEvent.KEYCODE_MEDIA_NEXT
+                else -> return ReceiveResult.Nack
+            }
+            val audio = getSystemService(AudioManager::class.java)
+            if (runCatching {
+                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, key))
+                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, key))
+            }.isFailure) return ReceiveResult.Nack
+            lastAccepted = request
+            return ReceiveResult.Ack
+        }
         if (command == 1u) {
             if (state != null) return ReceiveResult.Nack
             val sport = argument?.toInt()?.let(watchSports::getOrNull) ?: return ReceiveResult.Nack
+            if (!WorkoutRecorder.armed.value && Settings.canDrawOverlays(this) && runCatching {
+                startActivity(phoneIntent(this, sport))
+            }.isSuccess) {
+                lastAccepted = request
+                return ReceiveResult.Ack
+            }
             if (gpsGranted(this, sport) && runCatching {
                 if (WorkoutRecorder.armed.value) startService(startIntent(this, sport))
                 else startForegroundService(startIntent(this, sport))
@@ -115,11 +139,11 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
             else -> null
         }
 
-        private fun gpsGranted(context: Context, sport: Sport) =
+        internal fun gpsGranted(context: Context, sport: Sport) =
             !sport.gpsDefault || context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
 
-        private fun startIntent(context: Context, sport: Sport) =
+        internal fun startIntent(context: Context, sport: Sport) =
             Intent(context, WorkoutRecorder::class.java).setAction(WorkoutRecorder.START).apply {
                 putExtra("sport", sport.name)
                 putExtra("gps", sport.gpsDefault)
@@ -127,6 +151,12 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
                 putExtra("from_watch", true)
                 putExtra("strap", context.getSharedPreferences("workout_setup", 0).getString("strap_address", null))
             }
+
+        internal fun phoneIntent(context: Context, sport: Sport? = null) =
+            Intent(context, WorkoutActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra("show_watch_workout", true)
+                .apply { sport?.let { putExtra("watch_start_sport", it.name) } }
 
         internal fun clearRequest(context: Context) =
             context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION)
@@ -137,12 +167,7 @@ class WatchWorkoutCommands : BasePebbleListenerService() {
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(NotificationChannel(CHANNEL, "Watch workout requests", NotificationManager.IMPORTANCE_HIGH))
             val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            val open = if (gpsGranted(context, sport)) {
-                PendingIntent.getForegroundService(context, NOTIFICATION, startIntent(context, sport), flags)
-            } else {
-                PendingIntent.getActivity(context, NOTIFICATION,
-                    Intent(context, WorkoutActivity::class.java).putExtra("watch_sport", sport.name), flags)
-            }
+            val open = PendingIntent.getActivity(context, NOTIFICATION, phoneIntent(context, sport), flags)
             manager.notify(NOTIFICATION, Notification.Builder(context, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("Start ${sport.label.lowercase()}")

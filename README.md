@@ -101,7 +101,13 @@ record a route before you select a sport. Open Pebble Health Workout, press **Se
 choose a sport. During recording, **Select** opens controls for pause, resume, laps
 or strength rest and repeat-set, and finishing or discarding. Discard requires a
 second confirmation and deletes the unsaved recording. If Android blocks an
-unprepared start, check your phone for the start notification.
+unprepared start, tap the start notification to open the workout on your phone.
+
+To open the live phone display automatically, tap **Enable auto-open live display**
+under **Record workout** and allow **Display over other apps** in Android settings.
+This applies when you pick a sport or accept an automatic walk or run prompt on the
+watch. The live display can appear over the lock screen. If you leave this permission
+off, tap the phone's recording notification to open the live display.
 
 ### Watch heart rate during recording
 
@@ -117,16 +123,20 @@ On the home screen, **Up** opens **Live stats** with heart rate and phone GPS an
 strap status. It also reads the wrist sensor on a compatible watch while the screen
 is open, even before a workout or when the phone is out of range. During a recording,
 press **Up** again for the workout display.
-**Down** opens the eight most recent phone and synced dashboard activities. Scroll with
-**Up** and **Down**, and use **Select** to see an entry's details. The last fetched list
-is available on the watch if your phone is out of range. From home, **Select** opens
-the sport picker or controls for the recording in progress.
+**Down** opens **Menu** from home, live stats or a workout. **History** shows the eight most
+recent phone and synced dashboard activities. Scroll with **Up** and **Down**, and use
+**Select** to see an entry's details. The last fetched list is available if the phone is
+out of range. **Media Control** sends next, play/pause and previous to the Android phone's
+media player over PebbleKit 2. Open your media player on the phone before using these
+controls. From home, **Select** opens the sport picker or controls for the recording
+in progress.
 
 ### Automatic walk and run prompts
 
-On a Pebble with Pebble Health enabled, open **Pebble Health Workout**, press **Select**,
-and choose **Auto-detect: Off** to turn on prompts. PebbleOS allows one background worker
-at a time, so the watch may ask you to replace the current one. After PebbleOS recognizes
+On a Pebble with Pebble Health enabled, open **Pebble Health Workout** and press **Down**
+to open **Menu**. Choose **Settings → Auto-detect: Off** to turn on prompts. PebbleOS
+allows one background worker at a time, so the watch may ask you to replace the current
+one. After PebbleOS recognizes
 an ongoing walk or run, the watch opens a prompt to start a phone recording or dismiss it.
 Dismissal leaves the built-in activity logging and GravelEx sync alone. To start from the
 prompt while the phone is locked, use **Ready for watch start** as described above.

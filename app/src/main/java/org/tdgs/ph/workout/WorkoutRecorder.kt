@@ -139,7 +139,8 @@ internal class WorkoutRecorder : Service(), LocationListener {
                 val sport = intent.getStringExtra("sport")?.let { Sport.valueOf(it) }
                 if (sport == null) shutdown() else start(
                     sport, intent.getBooleanExtra("gps", false), intent.getStringExtra("strap"),
-                    intent.getBooleanExtra("mirror_watch", false), intent.getBooleanExtra("from_watch", false)
+                    intent.getBooleanExtra("mirror_watch", false), intent.getBooleanExtra("from_watch", false),
+                    intent.getBooleanExtra("phone_display_open", false)
                 )
             }
             OPEN_WATCH -> launchWatch()
@@ -225,7 +226,9 @@ internal class WorkoutRecorder : Service(), LocationListener {
         }
     }
 
-    private fun start(sport: Sport, gps: Boolean, address: String?, mirrorWatch: Boolean, fromWatch: Boolean) {
+    private fun start(
+        sport: Sport, gps: Boolean, address: String?, mirrorWatch: Boolean, fromWatch: Boolean, phoneDisplayOpen: Boolean,
+    ) {
         wantsGps = gps && granted(Manifest.permission.ACCESS_FINE_LOCATION)
         val hasStrap = address != null && (Build.VERSION.SDK_INT < 31 || granted(Manifest.permission.BLUETOOTH_CONNECT))
         if ((fromWatch && gps && !wantsGps) || (!armed.value && !promote(sport, wantsGps, hasStrap))) {
@@ -270,6 +273,9 @@ internal class WorkoutRecorder : Service(), LocationListener {
             }).also { it.connect() }
         }
         handler.post(ticker)
+        if (fromWatch && !phoneDisplayOpen) {
+            runCatching { startActivity(WatchWorkoutCommands.phoneIntent(this)) }
+        }
     }
 
     private fun launchWatch() {

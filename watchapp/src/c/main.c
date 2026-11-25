@@ -20,7 +20,7 @@ static unsigned wrist_bpm;
 #define SESSION_TOKEN_MASK UINT32_C(0x7fffffff)
 static unsigned pending_command;
 enum { HOME, SENSORS, WORKOUT, HISTORY, HISTORY_DETAIL };
-static unsigned page;
+static unsigned page, history_return_page;
 
 enum { HISTORY_LIMIT = 8, HISTORY_ROW = 13, HISTORY_KEY = 203 };
 static uint8_t history[HISTORY_LIMIT * HISTORY_ROW];
@@ -31,21 +31,26 @@ static uint32_t sensor_status, sensor_bpm;
 static time_t notice_until;
 static const char *notice;
 static Window *options_window;
+static Window *utilities_window;
+static SimpleMenuLayer *utilities;
 static SimpleMenuLayer *options;
 static SimpleMenuItem items[11];
 static unsigned actions[11];
 static SimpleMenuSection section;
 
-enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
-enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT };
+enum { START = 1, PAUSE, RESUME, LAP, START_REST, SAVE, DISCARD, REPEAT_SET, REQUEST_SENSORS, REQUEST_HISTORY, WATCH_HEART, MEDIA_COMMAND, OPEN_FINISH, OPEN_DISCARD, TOGGLE_DETECTION };
+enum { SPORTS, CONTROLS, END_WORKOUT, CONFIRM_DISCARD, DETECTED_WORKOUT, SETTINGS, MEDIA };
+enum { MEDIA_PREVIOUS = 1, MEDIA_PLAY_PAUSE, MEDIA_NEXT };
 static const char *sports[] = {
   "Running", "Walking", "Hiking", "Cycling", "Strength",
   "Tennis", "Rowing", "Yoga", "Beat Saber", "Other workout"
 };
 static unsigned menu_type;
 static void show_notice(const char *message);
+static void media_status(const char *message);
 #if defined(PBL_HEALTH)
 static int detected_sport;
+static bool detection_pending;
 static time_t last_detection_offer;
 static void offer_detection(void);
 
@@ -73,7 +78,8 @@ static void send_command(unsigned command, unsigned argument) {
   if (sending) return;
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) != APP_MSG_OK) {
-    show_notice("Try again");
+    if (command == MEDIA_COMMAND) media_status("Try again");
+    else show_notice("Try again");
     return;
   }
   dict_write_uint8(out, 20, command);
@@ -84,8 +90,12 @@ static void send_command(unsigned command, unsigned argument) {
   if (app_message_outbox_send() == APP_MSG_OK) {
     pending_command = command;
     sending = true;
-    starting = command == START;
-    if (starting) show_notice("Starting on phone...");
+    if (command == START) {
+      starting = true;
+      show_notice("Starting on phone...");
+    }
+  } else if (command == MEDIA_COMMAND) {
+    media_status("Phone unavailable");
   } else if (command < REQUEST_SENSORS) {
     show_notice("Could not reach phone");
   }
@@ -128,12 +138,25 @@ static void on_watch_heart(HealthEventType event, void *context) {
 
 static void populate_menu(unsigned type);
 
+static void media_status(const char *message) {
+  if (menu_type != MEDIA || window_stack_get_top_window() != options_window) return;
+  section.title = message;
+  layer_mark_dirty(simple_menu_layer_get_layer(options));
+}
+
 static void show_submenu(void *type) {
   populate_menu((unsigned)(uintptr_t)type);
 }
 
 static void select_option(int index, void *context) {
   unsigned action = actions[index];
+  if (menu_type == MEDIA) {
+    if (!sending) {
+      media_status("Media control");
+      send_command(MEDIA_COMMAND, action);
+    }
+    return;
+  }
   if (action == OPEN_FINISH || action == OPEN_DISCARD) {
     const uintptr_t type = action == OPEN_FINISH ? END_WORKOUT : CONFIRM_DISCARD;
     app_timer_register(1, show_submenu, (void *)type);
@@ -142,6 +165,7 @@ static void select_option(int index, void *context) {
   window_stack_pop(true);
 #if defined(PBL_HEALTH)
   if (action == TOGGLE_DETECTION) {
+    window_stack_pop(true);
     toggle_detection();
     return;
   }
@@ -167,9 +191,19 @@ static void populate_menu(unsigned type) {
   if (type == SPORTS) {
     section.title = "Start on phone";
     for (unsigned i = 0; i < sizeof(sports) / sizeof(sports[0]); i++) add_option(sports[i], START);
+  } else if (type == SETTINGS) {
+    section.title = "Settings";
 #if defined(PBL_HEALTH)
     add_option(app_worker_is_running() ? "Auto-detect: On" : "Auto-detect: Off", TOGGLE_DETECTION);
+#else
+    add_option("No auto-detection", 0);
+    items[0].callback = NULL;
 #endif
+  } else if (type == MEDIA) {
+    section.title = "Media control";
+    add_option("Next track", MEDIA_NEXT);
+    add_option("Play / pause", MEDIA_PLAY_PAUSE);
+    add_option("Previous track", MEDIA_PREVIOUS);
   } else if (type == CONTROLS) {
     section.title = "Workout controls";
     add_option(state == 1 ? "Resume" : "Pause", state == 1 ? RESUME : PAUSE);
@@ -205,6 +239,11 @@ static void populate_menu(unsigned type) {
 
 #if defined(PBL_HEALTH)
 static void offer_detection(void) {
+  if (window_stack_contains_window(utilities_window)) {
+    detection_pending = true;
+    return;
+  }
+  detection_pending = false;
   if (!app_worker_is_running() || starting ||
       (received && state < 2 && time(NULL) - received <= 8)) return;
   const time_t now = time(NULL);
@@ -246,12 +285,50 @@ static void open_options(ClickRecognizerRef recognizer, void *context) {
   window_stack_push(options_window, true);
 }
 
+static void select_utility(int index, void *context) {
+  if (index == 0) {
+    window_stack_pop(true);
+    history_return_page = page;
+    page = HISTORY;
+    notice_until = 0;
+    history_selection = 0;
+    history_request = 0;
+    history_answered = false;
+    layer_mark_dirty(display);
+  } else {
+    populate_menu(index == 1 ? SETTINGS : MEDIA);
+    window_stack_push(options_window, true);
+  }
+}
+
+static void create_utilities(void) {
+  static const SimpleMenuItem entries[] = {
+    { .title = "History", .callback = select_utility },
+    { .title = "Settings", .callback = select_utility },
+    { .title = "Media control", .callback = select_utility },
+  };
+  static const SimpleMenuSection menu_section = {
+    .title = "Menu", .items = entries, .num_items = ARRAY_LENGTH(entries),
+  };
+  utilities_window = window_create();
+  Layer *root = window_get_root_layer(utilities_window);
+  utilities = simple_menu_layer_create(layer_get_bounds(root), utilities_window, &menu_section, 1, NULL);
+  menu_layer_set_highlight_colors(simple_menu_layer_get_menu_layer(utilities),
+      PBL_IF_COLOR_ELSE(GColorMidnightGreen, GColorBlack), GColorWhite);
+  layer_add_child(root, simple_menu_layer_get_layer(utilities));
+}
+
 static void navigation_back(ClickRecognizerRef recognizer, void *context) {
   if (page == HOME) {
     window_stack_pop(true);
     return;
   }
-  page = page == HISTORY_DETAIL ? HISTORY : HOME;
+  if (page == HISTORY) {
+    page = history_return_page;
+    window_stack_push(utilities_window, true);
+  } else {
+    page = page == HISTORY_DETAIL ? HISTORY : HOME;
+  }
   notice_until = 0;
   layer_mark_dirty(display);
 }
@@ -273,11 +350,8 @@ static void navigation_down(ClickRecognizerRef recognizer, void *context) {
   if (page == HISTORY || page == HISTORY_DETAIL) {
     if (history_selection + 1 < history_count) history_selection++;
   } else {
-    page = HISTORY;
-    notice_until = 0;
-    history_selection = 0;
-    history_request = 0;
-    history_answered = false;
+    simple_menu_layer_set_selected_index(utilities, 0, false);
+    window_stack_push(utilities_window, true);
   }
   layer_mark_dirty(display);
 }
@@ -291,12 +365,14 @@ static void click_config(void *context) {
 
 static void outbox_sent(DictionaryIterator *iter, void *context) {
   sending = false;
-  if (starting) show_notice("Waiting for recording");
+  if (pending_command == START && starting) show_notice("Waiting for recording");
 }
 
 static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *context) {
   sending = false;
-  if (pending_command < REQUEST_SENSORS) {
+  if (pending_command == MEDIA_COMMAND) {
+    media_status("Phone unavailable");
+  } else if (pending_command < REQUEST_SENSORS) {
     show_notice(starting ? "Check phone to start" : "Command not delivered");
     starting = false;
   }
@@ -306,6 +382,15 @@ static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, voi
 static void label(GContext *ctx, const char *text, const char *font, GRect bounds) {
   graphics_draw_text(ctx, text, fonts_get_system_font(font), bounds,
       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
+static void draw_clock(GContext *ctx, int w) {
+  char clock[12];
+  clock_copy_time_string(clock, sizeof(clock));
+  const int right = PBL_IF_ROUND_ELSE(w * 3 / 4, w - 4);
+  const int top = PBL_IF_ROUND_ELSE(11, 0);
+  graphics_draw_text(ctx, clock, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+      GRect(right - 56, top, 56, 16), GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
 }
 
 static void panel(GContext *ctx, GRect box, bool emphasized) {
@@ -377,7 +462,7 @@ static void draw_strength(GContext *ctx, int w, int h, bool live,
   int inset = PBL_IF_ROUND_ELSE(w / 6, w / 10);
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRajah, GColorWhite));
   label(ctx, title[0] ? title : "Strength", PBL_IF_ROUND_ELSE(FONT_KEY_GOTHIC_14_BOLD, FONT_KEY_GOTHIC_18_BOLD),
-      GRect(inset, h * 8 / 100, w - 2 * inset, 20));
+      GRect(inset, PBL_IF_ROUND_ELSE(23, h * 8 / 100), w - 2 * inset, 20));
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   snprintf(text, sizeof(text), "%s  /  %lu %s", clock, (unsigned long)count, count == 1 ? "set" : "sets");
   label(ctx, text, FONT_KEY_GOTHIC_18, GRect(0, h * 18 / 100, w, 24));
@@ -439,7 +524,7 @@ static void draw_home(GContext *ctx, int w, int h) {
   const int gap = h < 180 ? 26 : (h - top - 26) / 2 - 4;
   home_row(ctx, w, top, "Up", "Live stats", false);
   home_row(ctx, w, top + gap, "Select", "Workouts", true);
-  home_row(ctx, w, top + 2 * gap, "Down", "History", false);
+  home_row(ctx, w, top + 2 * gap, "Down", "Menu", false);
 }
 
 static void draw_sensors(GContext *ctx, int w, int h) {
@@ -456,7 +541,7 @@ static void draw_sensors(GContext *ctx, int w, int h) {
   const char *gps_text[] = {"GPS off", "GPS ready", "Finding GPS…", "GPS fix", "GPS paused", "GPS unavailable"};
   char text[32];
 
-  label(ctx, "Live stats", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 5 / 100, w, 32));
+  label(ctx, "Live stats", FONT_KEY_GOTHIC_24_BOLD, GRect(0, PBL_IF_ROUND_ELSE(24, 13), w, 32));
   if (bpm) snprintf(text, sizeof(text), "%u", bpm);
   else snprintf(text, sizeof(text), "--");
   graphics_context_set_text_color(ctx, bpm ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
@@ -501,7 +586,7 @@ static void history_date(const uint8_t *row, char *out, size_t size, const char 
 
 static void draw_history(GContext *ctx, int w, int h) {
   int inset = PBL_IF_ROUND_ELSE(w / 8, 8);
-  label(ctx, "History", FONT_KEY_GOTHIC_24_BOLD, GRect(0, h * 4 / 100, w, 34));
+  label(ctx, "History", FONT_KEY_GOTHIC_24_BOLD, GRect(0, PBL_IF_ROUND_ELSE(23, 12), w, 34));
   if (!history_count) {
     const char *message = history_answered ? "No saved workouts" :
         history_request && time(NULL) - history_request <= 8 ? "Loading workouts…" : "Open Pebble Health";
@@ -558,6 +643,7 @@ static void draw(Layer *layer, GContext *ctx) {
   bool stale = !received || time(NULL) - received > 8;
   bool live = !stale && state == 0;
   graphics_context_set_text_color(ctx, GColorWhite);
+  draw_clock(ctx, w);
   char text[32];
   if (notice && time(NULL) < notice_until) {
     label(ctx, notice, FONT_KEY_GOTHIC_18_BOLD, GRect(w / 12, h * 38 / 100, w * 5 / 6, 28));
@@ -578,7 +664,7 @@ static void draw(Layer *layer, GContext *ctx) {
     return;
   }
   snprintf(text, sizeof(text), "%s%s%s", time, status ? "  " : "", status ? status : "");
-  const int banner_top = h * 5 / 100;
+  const int banner_top = PBL_IF_ROUND_ELSE(24, 15);
   panel(ctx, GRect(w / 8, banner_top, w * 3 / 4, 22), live);
   graphics_context_set_text_color(ctx, live ? PBL_IF_COLOR_ELSE(GColorMintGreen, GColorWhite) : GColorWhite);
   label(ctx, text, FONT_KEY_GOTHIC_18_BOLD, GRect(0, banner_top - 1, w, 23));
@@ -586,7 +672,7 @@ static void draw(Layer *layer, GContext *ctx) {
   if (live && heart) snprintf(text, sizeof(text), "%lu", (unsigned long)heart);
   else snprintf(text, sizeof(text), "--");
   graphics_context_set_text_color(ctx, active ? zone_color(active - 1) : GColorWhite);
-  label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, h * 16 / 100, w, 50));
+  label(ctx, text, FONT_KEY_BITHAM_42_BOLD, GRect(0, banner_top + 17, w, 50));
   if (active > 1) snprintf(text, sizeof(text), "%s  /  Zone %u", wrist_requested ? "Watch bpm" : "bpm", active - 1);
   else if (active == 1) snprintf(text, sizeof(text), "%s  /  Below Z1", wrist_requested ? "Watch bpm" : "bpm");
   else if (live && heart && wrist_requested) snprintf(text, sizeof(text), "Watch bpm");
@@ -687,6 +773,9 @@ static void inbox(DictionaryIterator *iter, void *context) {
 static void tick(struct tm *current_time, TimeUnits units) {
   const time_t clock = time(NULL);
   update_wrist_sampling(clock);
+#if defined(PBL_HEALTH)
+  if (detection_pending && !window_stack_contains_window(utilities_window)) offer_detection();
+#endif
   if (!sending && page == SENSORS && clock - sensor_request >= 8) {
     sensor_request = clock;
     send_command(REQUEST_SENSORS, 0);
@@ -708,6 +797,7 @@ int main(void) {
 #endif
   window = window_create();
   options_window = window_create();
+  create_utilities();
   window_set_click_config_provider(window, click_config);
   window_set_background_color(window, GColorBlack);
   Layer *root = window_get_root_layer(window);
@@ -738,6 +828,8 @@ int main(void) {
   app_message_deregister_callbacks();
   if (options) simple_menu_layer_destroy(options);
   window_destroy(options_window);
+  simple_menu_layer_destroy(utilities);
+  window_destroy(utilities_window);
   layer_destroy(display);
   window_destroy(window);
 #if defined(PBL_COLOR)

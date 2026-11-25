@@ -9,8 +9,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -69,19 +71,54 @@ fun WorkoutEntry() {
 
 internal class WorkoutActivity : ComponentActivity() {
     private var screenVisible by mutableStateOf(false)
+    private var watchSport by mutableStateOf<Sport?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureWatchLaunch(intent)
+        watchSport = Sport.entries.firstOrNull { it.name == savedInstanceState?.getString("watch_setup_sport") }
         enableEdgeToEdge()
         val repo = (application as PhApp).repository
         setContent {
             val prefs by repo.settings.prefs.collectAsState(initial = Prefs(8000, 8, "system"))
             PhTheme(prefs.theme) {
-                WorkoutScreen(repo, intent.getBooleanExtra("history", false),
-                    intent.getStringExtra("workout_id"), intent.getBooleanExtra("manual_entry", false),
-                    Sport.entries.firstOrNull { it.name == intent.getStringExtra("watch_sport") }, screenVisible, ::finish)
+                key(watchSport) {
+                    WorkoutScreen(repo, watchSport == null && intent.getBooleanExtra("history", false),
+                        intent.getStringExtra("workout_id").takeIf { watchSport == null },
+                        watchSport == null && intent.getBooleanExtra("manual_entry", false),
+                        watchSport, screenVisible, ::finish)
+                }
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("watch_setup_sport", watchSport?.name)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        configureWatchLaunch(intent)
+    }
+
+    private fun configureWatchLaunch(intent: Intent) {
+        val show = intent.getBooleanExtra("show_watch_workout", false)
+        setShowWhenLocked(show)
+        setTurnScreenOn(show)
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        val sport = Sport.entries.firstOrNull { it.name == intent.getStringExtra("watch_start_sport") } ?: return
+        intent.removeExtra("watch_start_sport")
+        if (WorkoutRecorder.live.value != null) return
+        if (WatchWorkoutCommands.gpsGranted(this, sport) && runCatching {
+            startForegroundService(WatchWorkoutCommands.startIntent(this, sport)
+                .putExtra("phone_display_open", true))
+        }.isSuccess) return
+        watchSport = sport
     }
 
     override fun onStart() { super.onStart(); screenVisible = true }
@@ -106,6 +143,10 @@ private fun WorkoutScreen(repo: Repository, openHistory: Boolean, initialId: Str
         value = withContext(Dispatchers.IO) { runCatching { WorkoutStore.get(context) } }
     }
     val store = storeResult?.getOrNull()
+
+    LaunchedEffect(live?.workout?.id) {
+        if (live != null) adding = false
+    }
 
     LaunchedEffect(finished) {
         finished?.let {
@@ -378,6 +419,16 @@ private fun Setup(visible: Boolean, watchSport: Sport?) {
                     if (permissions.isEmpty()) armWatch() else armPermission.launch(permissions.toTypedArray())
                 }
             }) { Text(if (armed) "Stop waiting for watch" else "Ready for watch start") }
+            var autoOpen by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+            val launchDisplaySettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+                autoOpen = Settings.canDrawOverlays(context)
+            }
+            TextButton(onClick = {
+                launchDisplaySettings.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:${context.packageName}")))
+            }) { Text(if (autoOpen) "Auto-open live display: On" else "Enable auto-open live display") }
+            Text("Allow Display over other apps in Android settings to open the live workout from your Pebble.",
+                style = MaterialTheme.typography.bodySmall)
             Text(if (armed) "Open Pebble Health Workout on your Pebble and pick a sport."
                 else "Prepare for a watch start before locking your phone. Waits up to one hour.",
                 style = MaterialTheme.typography.bodySmall)
