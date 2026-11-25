@@ -36,6 +36,10 @@ import org.tdgs.ph.ui.Fmt
 import org.tdgs.ph.ui.components.Bar
 import org.tdgs.ph.ui.components.BarChart
 import org.tdgs.ph.ui.components.BigValue
+import org.tdgs.ph.ui.components.ComponentMeter
+import org.tdgs.ph.ui.components.DayRibbon
+import org.tdgs.ph.ui.components.RibbonLegend
+import org.tdgs.ph.ui.components.SleepNightsChart
 import org.tdgs.ph.ui.components.Note
 import org.tdgs.ph.ui.components.PhCard
 import org.tdgs.ph.ui.components.RangeChart
@@ -43,6 +47,7 @@ import org.tdgs.ph.ui.components.Segmented
 import org.tdgs.ph.ui.components.SleepTimeline
 import org.tdgs.ph.ui.components.StatRow
 import org.tdgs.ph.ui.components.TimeLineChart
+import org.tdgs.ph.ui.components.TrendSpark
 import org.tdgs.ph.ui.theme.LocalMetrics
 import java.time.LocalDate
 import java.time.YearMonth
@@ -53,7 +58,7 @@ private val RANGE_DAYS = listOf(1, 7, 28, 365)
 private val TITLES = mapOf(
     "steps" to "Steps", "heart" to "Heart rate", "sleep" to "Sleep", "stress" to "Stress", "readiness" to "Readiness",
     "oxygen" to "Pulse Ox", "weight" to "Weight", "battery" to "Watch battery", "intensity" to "Intensity minutes",
-    "energy" to "Calories",
+    "energy" to "Calories", "recovery" to "Recovery",
 )
 
 @Composable
@@ -68,6 +73,7 @@ fun MetricDetailScreen(repo: Repository, name: String, back: () -> Unit) {
             "sleep" -> sleepDetail(d)
             "stress" -> stressDetail(d)
             "readiness" -> readinessDetail(d)
+            "recovery" -> recoveryDetail(d)
             "oxygen" -> oxygenDetail(d)
             "weight" -> weightDetail(d)
             "battery" -> batteryDetail(d)
@@ -123,7 +129,6 @@ private fun RangedDaily(repo: Repository, d: Dashboard, name: String, today: Loc
     }
 }
 
-private fun hourAxis(start: Long) = listOf(0, 6, 12, 18).map { start + it * 3600L to "%02d".format(it) }
 
 @Composable
 private fun DayView(name: String, i: Intraday, d: Dashboard, color: Color, goal: Int) {
@@ -148,9 +153,14 @@ private fun DayView(name: String, i: Intraday, d: Dashboard, color: Color, goal:
             val day = d.days.firstOrNull { it.date == i.date }
             BigValue(Fmt.int(day?.hrAvg), "bpm avg", "${pts.size} readings")
             Spacer(Modifier.height(12.dp))
-            val sleep = i.sleep.filter { it.third == "sleep" }.map { it.first to it.first + it.second }
-            TimeLineChart(pts, i.start, i.end, color, axis = hourAxis(i.start), gapS = 30 * 60, bands = sleep,
-                bandColor = m.sleep.copy(alpha = 0.10f))
+            // The full-day timeline: sleep sessions, workouts, minute HR over zone bands, steps, stress and SpO2.
+            val nights = i.sleep.map { (s, secs, kind) ->
+                org.tdgs.ph.data.Night(i.date, secs, null, kind != "sleep", s, s + secs, listOf(s to s + secs), emptyList())
+            }
+            DayRibbon(i.start, i.end, d.now, d.tz,
+                i.points.map { org.tdgs.ph.data.Observation(it.ts, it.hr, it.steps, false) }, nights, d.workouts,
+                d.stressPoints, d.oxygenReadings, d.hrMax, hrHeight = 160.dp)
+            RibbonLegend()
             StatRow("Resting" to Fmt.int(day?.restingHr), "Low" to Fmt.int(day?.hrMin), "High" to Fmt.int(day?.hrMax))
             if (pts.isNotEmpty()) zoneSummary(pts.map { it.second }, d.hrMax)
             if (pts.size < 120) Note("Heart rate was recorded in ${pts.size} of ${i.points.size} minutes. Set the watch's heart rate monitoring to its most frequent interval for continuous data.")
@@ -237,6 +247,16 @@ private fun LazyListScope.sleepDetail(d: Dashboard) {
             Note("Dark: restful sleep as labelled by the watch. Nights without a recording are absent, not zero.")
         }
     }
+    if (nights.any { it.onset != null && it.wake != null }) item {
+        val m = LocalMetrics.current
+        PhCard {
+            Text("Night by night", style = MaterialTheme.typography.titleSmall)
+            Text("20:00 to 12:00 · dark = restful · grey = not recorded · dashed = your usual bed and wake time",
+                style = MaterialTheme.typography.labelSmall, color = m.muted, modifier = Modifier.padding(bottom = 8.dp))
+            SleepNightsChart(nights.takeLast(21), d.tz)
+            d.sleepRegularitySdMin?.let { Note("Timing spread this week: ±${Fmt.int(it)} minutes.") }
+        }
+    }
     items(nights.reversed().take(14)) { n ->
         val m = LocalMetrics.current
         PhCard {
@@ -275,14 +295,68 @@ private fun LazyListScope.stressDetail(d: Dashboard) {
 }
 
 private fun LazyListScope.readinessDetail(d: Dashboard) {
+    val r = d.readinessDetail
+    item {
+        val m = LocalMetrics.current
+        PhCard {
+            BigValue(r.score?.toString() ?: "—", null,
+                (if (r.sleepOnly) "Sleep-only guidance" else Fmt.readinessWord(r.score)) +
+                    when { r.stockEstimate -> " · stock-firmware estimate"; r.provisional -> " · provisional"; else -> " · experimental" })
+            Spacer(Modifier.height(8.dp))
+            r.components.forEach { c -> ComponentMeter(COMPONENT_NAMES[c.key] ?: c.key.replace('_', ' '), c.score, m.readiness, c.detail, c.weight) }
+            r.reason?.let { Note(it) }
+            r.missing.forEach { Note("Missing · $it") }
+            Note(if (r.stockEstimate) "Stock-firmware readiness weights sleep, overnight pulse and confirmed training. Missing inputs are left out, never guessed."
+                else "HRV, resting heart rate and load are compared with your own baselines; sleep with your need and timing. Missing inputs are left out, never guessed.")
+        }
+    }
     item {
         PhCard {
-            BigValue(d.readiness.score?.toString() ?: "—", null, Fmt.readinessWord(d.readiness.score))
-            if (d.readinessComponents.isNotEmpty()) {
-                StatRow(*d.readinessComponents.entries.take(3).map { (k, v) -> k.replace('_', ' ') to (v?.toString() ?: "—") }.toTypedArray())
-            }
-            d.readiness.reason?.let { Note(it) }
             StatRow("Training" to (d.trainingStatus ?: "—"), "Acute" to Fmt.int(d.acuteLoad), "Chronic" to Fmt.int(d.chronicLoad))
+        }
+    }
+}
+
+/** HRV against its usual range, the stock overnight pulse estimate and pulse during sleep. */
+private fun LazyListScope.recoveryDetail(d: Dashboard) {
+    val hs = d.hrvStatus
+    item {
+        val m = LocalMetrics.current
+        PhCard {
+            BigValue(hs.lastNightMs?.let { Fmt.int(it) } ?: "—", "ms", "HRV last night · ${hs.status?.let { HRV_WORDS[it] ?: it } ?: "no status"}")
+            StatRow("7-night avg" to (hs.weeklyMs?.let { Fmt.dec(it) } ?: "—"),
+                "Usual" to (if (hs.lowMs != null && hs.highMs != null) "${Fmt.int(hs.lowMs)}–${Fmt.int(hs.highMs)}" else "—"),
+                "Nights" to (hs.nightsThisWeek?.let { "$it / 7" } ?: "—"))
+            val byNight = d.hrvNights.associateBy { it.night }
+            val today = LocalDate.parse(d.today)
+            val series = (27 downTo 0).map { byNight[today.minusDays(it.toLong()).toString()]?.rmssdMs }
+            if (series.any { it != null }) {
+                Text("Last 28 nights · shaded = your usual range", style = MaterialTheme.typography.labelSmall, color = m.muted,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                TrendSpark(series, m.readiness, Modifier.fillMaxWidth().height(120.dp),
+                    if (hs.lowMs != null && hs.highMs != null) hs.lowMs to hs.highMs else null)
+            }
+            hs.reason?.let { Note(it) }
+            if (hs.estimate) Note("RMSSD estimated from the nightly pulse-interval recording; not validated against an ECG.")
+            if (hs.baselineNights != null && hs.requiredNights != null && hs.baselineNights < hs.requiredNights)
+                Note("Usual range: ${hs.baselineNights} of ${hs.requiredNights} nights so far.")
+        }
+    }
+    if (d.overnightPulse.isNotEmpty() || d.sleepPulse.isNotEmpty()) item {
+        val m = LocalMetrics.current
+        PhCard {
+            Text("Overnight pulse", style = MaterialTheme.typography.titleSmall)
+            val p = d.overnightPulse.takeLast(14)
+            if (p.isNotEmpty()) BarChart(p.map { Bar(Fmt.dayTiny(LocalDate.parse(it.night)), it.value) }, m.heart, Modifier.padding(top = 8.dp),
+                height = 110.dp, valueText = { "${Fmt.dec(it)} bpm" }, labelEvery = 2)
+            val sp = d.sleepPulse.takeLast(14)
+            if (sp.isNotEmpty()) {
+                Text("Pulse during sleep", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+                BarChart(sp.map { Bar(Fmt.dayTiny(LocalDate.parse(it.night)), it.value) }, m.heart.copy(alpha = 0.7f), Modifier.padding(top = 8.dp),
+                    height = 110.dp, valueText = { "${Fmt.dec(it)} bpm" }, labelEvery = 2)
+            }
+            Note(if (d.stockMode) "Overnight pulse is a stock-firmware estimate, not a validated resting heart rate." else "Spot pulse readings during sleep; not a validated resting heart rate.")
+            if (d.stockMode && d.strainScore != null) Note("Overnight strain ${d.strainScore} / 100 (estimate from overnight pulse, not mental stress).")
         }
     }
 }

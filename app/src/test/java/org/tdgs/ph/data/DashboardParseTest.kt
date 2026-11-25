@@ -73,4 +73,65 @@ class DashboardParseTest {
         val days = parseDaily("""{"items":[{"date":"2026-11-01","minutes":0,"steps":null}]}""")
         assertNull(days.single().steps)
     }
+
+    private val recovery = """
+    {"now": 1795594980, "tz": "Europe/Copenhagen",
+     "recovery": {"today": "2026-11-25",
+        "readiness": {"score": 56, "provisional": true, "formula_version": "readiness-v2", "reason": "Partial: training_load missing",
+            "weights": {"hrv": 0.3, "resting_hr": 0.2, "sleep": 0.25, "training_load": 0.25},
+            "components": {"hrv": {"score": 56, "detail": "47.0 ms, +0.3 SD vs usual"}, "sleep": {"score": 55, "detail": "6.4 h"}},
+            "missing": ["training_load: needs 42 consecutive confirmed days (0 so far)"]},
+        "hrv_status": {"status": "balanced", "weekly_rmssd_ms": 38.1, "last_night_rmssd_ms": 47, "baseline_low_ms": 32.4,
+            "baseline_high_ms": 51.8, "nights_this_week": 7, "baseline_nights": 26, "required_baseline_nights": 14,
+            "provisional": false, "comparable_series": {"metric": "ppi_rmssd_estimate"}},
+        "nights": [{"night": "2026-11-25", "rmssd_ms": 47, "resting_hr": 51.1}],
+        "sleep": {"regularity_sd_min": 76},
+        "sleep_nights": [{"night": "2026-11-25", "sleep_s": 22980, "onset": 1795557900, "wake": 1795580880,
+            "sleep_intervals": [[1795557900, 1795580880]], "recorded_gaps": [[1795560000, 1795560900]]}]},
+     "stock_estimates": {"mode": "stock_firmware_estimates", "readiness": {"score": 48, "formula_version": "readiness-stock-v1"},
+        "pulse": {"points": [{"night": "2026-11-25", "pulse": 55.9}]}, "strain": {"score": 63, "measured_at": 1795568404}},
+     "sleep_pulse": [{"night": "2026-11-25", "pulse": 48.2}],
+     "daytime_stress": {"score": 26, "measured_at": 1795594380, "today": {"score": 32}},
+     "observations": [{"ts": 1795594920, "hr": 72, "steps": 4}, {"ts": 1795594980, "hr": 70, "steps": 0, "snapshot": true}]}
+    """.trimIndent()
+
+    @Test
+    fun readinessComesFromRecoveryWhenItScores() {
+        val d = Dashboard.parse(recovery)
+        assertEquals(56, d.readiness.score, "recovery.readiness wins over the stock estimate when it has a score")
+        val r = d.readinessDetail
+        assertEquals(listOf("hrv", "resting_hr", "sleep", "training_load"), r.components.map { it.key })
+        assertEquals("47.0 ms, +0.3 SD vs usual", r.components.first().detail)
+        assertEquals(0.3, r.components.first().weight)
+        assertNull(r.components.first { it.key == "training_load" }.score)
+        assertTrue(r.provisional && !r.stockEstimate && !r.sleepOnly)
+        assertEquals(1, r.missing.size)
+    }
+
+    @Test
+    fun parsesHrvPulseStressAndObservations() {
+        val d = Dashboard.parse(recovery)
+        assertEquals("balanced", d.hrvStatus.status)
+        assertEquals(47.0, d.hrvStatus.lastNightMs)
+        assertEquals(32.4, d.hrvStatus.lowMs)
+        assertTrue(d.hrvStatus.estimate)
+        assertEquals(47.0, d.hrvNights.single().rmssdMs)
+        assertEquals(55.9, d.overnightPulse.single().value)
+        assertTrue(d.stockMode)
+        assertEquals(63, d.strainScore)
+        assertEquals(48.2, d.sleepPulse.single().value)
+        assertEquals(76.0, d.sleepRegularitySdMin)
+        assertEquals(32, d.stressToday)
+        assertEquals(2, d.observations.size)
+        assertTrue(d.observations.last().snapshot)
+        assertEquals(1, d.lastNight?.gaps?.size)
+    }
+
+    @Test
+    fun hubWithoutNewFieldsStillParses() {
+        val d = Dashboard.parse(sample)
+        assertNull(d.hrvStatus.status)
+        assertTrue(d.hrvNights.isEmpty() && d.overnightPulse.isEmpty() && d.sleepPulse.isEmpty())
+        assertTrue(d.readinessDetail.sleepOnly, "stock sleep-based score is marked sleep-only")
+    }
 }

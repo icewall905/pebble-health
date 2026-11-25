@@ -30,12 +30,48 @@ data class Night(
     val wake: Long?,
     val sleepIntervals: List<Pair<Long, Long>>,
     val restfulIntervals: List<Pair<Long, Long>>,
+    /** Stretches inside the night with no recording; never treated as sleep or wake. */
+    val gaps: List<Pair<Long, Long>> = emptyList(),
 )
 
 data class SleepScore(val night: String?, val score: Int?, val sleepS: Int?, val restfulS: Int?, val needS: Int?,
                       val duration: Int?, val regularity: Int?, val reason: String?)
 
 data class Score(val score: Int?, val status: String?, val reason: String?)
+
+/** One readiness input: its 0-100 score, the hub's plain-language detail and its configured weight. */
+data class ReadinessComponent(val key: String, val score: Int?, val detail: String?, val weight: Double?, val provisional: Boolean)
+
+/** Readiness as the hub serves it in recovery.readiness (HRV model, or the stock estimate when that cannot score). */
+data class Readiness(
+    val score: Int?,
+    val sleepOnly: Boolean,
+    val status: String?,
+    val reason: String?,
+    val provisional: Boolean,
+    val stockEstimate: Boolean,
+    val components: List<ReadinessComponent>,
+    val missing: List<String>,
+)
+
+/** Weekly HRV against the personal usual range (recovery.hrv_status). */
+data class HrvStatus(
+    val status: String?,
+    val weeklyMs: Double?,
+    val lastNightMs: Double?,
+    val lowMs: Double?,
+    val highMs: Double?,
+    val nightsThisWeek: Int?,
+    val baselineNights: Int?,
+    val requiredNights: Int?,
+    val provisional: Boolean,
+    val estimate: Boolean,
+    val reason: String?,
+)
+
+data class HrvNight(val night: String, val rmssdMs: Double?, val restingHr: Double?)
+data class NightValue(val night: String, val value: Double)
+data class Observation(val ts: Long, val hr: Int?, val steps: Int?, val snapshot: Boolean)
 
 data class Workout(val id: String, val start: Long, val seconds: Int, val kind: String, val rpe: Double?,
                    val hrCoverage: Double?, val load: Double?, val excluded: Boolean,
@@ -79,6 +115,20 @@ data class Dashboard(
     val nights: List<Night>,
     val readiness: Score,
     val readinessComponents: Map<String, Int?>,
+    val readinessDetail: Readiness,
+    val hrvStatus: HrvStatus,
+    val hrvNights: List<HrvNight>,
+    /** Stock-firmware overnight pulse estimates, one per night. */
+    val overnightPulse: List<NightValue>,
+    val stockMode: Boolean,
+    val strainScore: Int?,
+    val strainMeasuredAt: Long?,
+    val sleepPulse: List<NightValue>,
+    val sleepRegularitySdMin: Double?,
+    val stressToday: Int?,
+    val stressMeasuredAt: Long?,
+    /** Minute readings for roughly the last 36 hours (the hub trims the rest). */
+    val observations: List<Observation>,
     val stress: Score,
     val stressPoints: List<StressPoint>,
     val stressDays: List<StressDay>,
@@ -119,7 +169,12 @@ data class Dashboard(
             val days = o.arr("daily").map(::day)
             val hr = latestHr(o)
             val stock = o.obj("stock_estimates")
-            val ready = stock.obj("readiness") ?: rec.obj("readiness")
+            // recovery.readiness is already the effective score: the hub substitutes the
+            // stock estimate there only when the HRV model cannot score.
+            val ready = rec.obj("readiness")?.takeIf { it.int("score") != null || it.int("sleep_based_score") != null }
+                ?: stock.obj("readiness") ?: rec.obj("readiness")
+            val hs = rec.obj("hrv_status")
+            val strain = stock.obj("strain")
             val stressObj = o.obj("daytime_stress")
             val ox = o.obj("oxygen")
             val w = o.obj("weight")
@@ -146,6 +201,26 @@ data class Dashboard(
                 nights = rec.arr("sleep_nights").map(::night),
                 readiness = Score(ready.int("score") ?: ready.int("sleep_based_score"), ready.str("status"), ready.str("reason")),
                 readinessComponents = ready.obj("components")?.mapValues { (_, v) -> v.int("score") } ?: emptyMap(),
+                readinessDetail = readiness(ready),
+                hrvStatus = HrvStatus(
+                    status = hs.str("status"), weeklyMs = hs.dbl("weekly_rmssd_ms"), lastNightMs = hs.dbl("last_night_rmssd_ms"),
+                    lowMs = hs.dbl("baseline_low_ms"), highMs = hs.dbl("baseline_high_ms"), nightsThisWeek = hs.int("nights_this_week"),
+                    baselineNights = hs.int("baseline_nights"), requiredNights = hs.int("required_baseline_nights"),
+                    provisional = hs.bool("provisional") == true,
+                    estimate = hs.obj("comparable_series").str("metric") == "ppi_rmssd_estimate", reason = hs.str("reason"),
+                ),
+                hrvNights = rec.arr("nights").mapNotNull { n -> n.str("night")?.let { HrvNight(it, n.dbl("rmssd_ms"), n.dbl("resting_hr")) } },
+                overnightPulse = stock.obj("pulse").arr("points").mapNotNull { p -> p.str("night")?.let { k -> p.dbl("pulse")?.let { NightValue(k, it) } } },
+                stockMode = stock.str("mode") == "stock_firmware_estimates",
+                strainScore = strain.int("score"),
+                strainMeasuredAt = strain.lng("measured_at"),
+                sleepPulse = o.arr("sleep_pulse").mapNotNull { p -> p.str("night")?.let { k -> p.dbl("pulse")?.let { NightValue(k, it) } } },
+                sleepRegularitySdMin = rec.obj("sleep").dbl("regularity_sd_min"),
+                stressToday = stressObj.obj("today").int("score"),
+                stressMeasuredAt = stressObj.lng("measured_at"),
+                observations = o.arr("observations").mapNotNull { p ->
+                    p.lng("ts")?.let { Observation(it, p.int("hr"), p.int("steps"), p.bool("snapshot") == true) }
+                },
                 stress = Score(stressObj.int("score"), stressObj.str("status"), stressObj.str("reason")),
                 stressPoints = stressObj.arr("points").mapNotNull { p -> p.lng("ts")?.let { StressPoint(it, p.int("score")) } },
                 stressDays = stressObj.arr("daily").mapNotNull { d -> d.str("date")?.let { StressDay(it, d.int("score")) } },
@@ -209,7 +284,26 @@ data class Dashboard(
             wake = e.lng("wake"),
             sleepIntervals = intervals(e.arr("sleep_intervals")),
             restfulIntervals = intervals(e.arr("restful_intervals")),
+            gaps = intervals(e.arr("recorded_gaps")),
         )
+
+        private fun readiness(r: JsonObject?): Readiness {
+            val weights = r.obj("weights")
+            val comps = r.obj("components")
+            val keys = (weights?.keys ?: comps?.keys ?: emptySet()).ifEmpty { setOf("hrv", "resting_hr", "sleep", "training_load") }
+            val score = r.int("score")
+            return Readiness(
+                score = score ?: r.int("sleep_based_score"),
+                sleepOnly = score == null && r.int("sleep_based_score") != null,
+                status = r.str("status"), reason = r.str("reason"), provisional = r.bool("provisional") == true,
+                stockEstimate = r.str("formula_version") == "readiness-stock-v1",
+                components = keys.map { k ->
+                    val c = comps.obj(k)
+                    ReadinessComponent(k, c.int("score"), c.str("detail"), weights.dbl(k), c.bool("provisional") == true)
+                },
+                missing = r.arr("missing").mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content },
+            )
+        }
 
         private fun sleepScore(e: JsonObject?) = SleepScore(
             night = e.str("night"), score = e.int("score"), sleepS = e.int("sleep_s"), restfulS = e.int("restful_s"),

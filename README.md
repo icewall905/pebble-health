@@ -9,11 +9,16 @@ Not affiliated with Core Devices, Pebble or any wearable vendor. Not a medical d
 
 ## Features
 
-- **Today**: steps ring and goal, readiness, stress, sleep timeline, heart rate, intensity
-  minutes, calories, pulse ox, watch battery, weight, last activity and the hub's AI insight
-- **Detail views** with Day / Week / Month / Year ranges for steps, heart rate (zones,
-  resting trend) and calories; sleep nights with restful segments; stress, readiness,
-  SpO₂, weight and battery history
+- **Today**: upload, battery and coverage status; the AI briefing; a timeline from 18:00
+  yesterday to midnight with sleep, workouts, heart rate over intensity zones, steps, stress
+  and SpO₂ (tap or drag to read every lane); readiness with each input; sleep against your
+  need and usual times; recovery signals (HRV against its usual range, overnight pulse,
+  pulse during sleep, SpO₂, stress); activity; eight tiles comparing the last week with
+  your usual; training, the latest workout and a year heatmap. Cards pair up on tablets
+- **Detail views** with Day / Week / Month / Year ranges for steps, heart rate (full-day
+  timeline, zones, resting trend) and calories; sleep night by night with restful segments
+  and gaps; recovery (HRV, overnight and sleep pulse); stress, readiness, SpO₂, weight and
+  battery history
 - **Activities** grouped by week, with heart-rate and cadence charts
 - **Log workout** with phone GPS, Bluetooth chest-strap heart rate, laps and strength sets.
   Review routes, splits and charts, save GPX files, and send workout summaries to your hub.
