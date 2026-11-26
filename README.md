@@ -144,19 +144,21 @@ use the Android phone's media player over PebbleKit 2. Open the player on your p
 first. From home, **Select** opens the sport picker or controls for the recording
 in progress.
 
-### Automatic walk and run prompts
+### Automatic walk and run detection
 
-On a Pebble with Pebble Health enabled, open **Pebble Health Workout** and press **Down**
-to open **Menu**. Choose **Settings → Auto-detect: Off** to turn on prompts. PebbleOS
-allows one background worker at a time, so the watch may ask you to replace the current
-one. After PebbleOS recognizes
-an ongoing walk or run, the watch opens a prompt to start a phone recording or dismiss it.
-The prompt takes the whole screen: **Select** starts the recording and **Back** dismisses
-it. It closes on its own after two minutes, which leaves the built-in activity logging
-alone. When the phone cannot start the recording directly, the same request appears there
-as a notification with **Start** and **Not now** buttons. Dismissal leaves the built-in
-activity logging and GravelEx sync alone. To start from the prompt while the phone is
-locked, use **Ready for watch start** as described above.
+Auto-detection is enabled by default on watches with Pebble Health. Open **Pebble
+Health Workout** once to start its background worker. PebbleOS allows one worker
+at a time and may ask if you want to replace another app's worker.
+
+When PebbleOS recognizes a walk or run, the default **On detect: Start** requests
+a phone workout with GPS. Use **Ready for watch start** before locking your phone,
+as described above. If the watch says **Check phone to start**, check for the
+start notification or open **Record workout** on your phone.
+
+On the watch, press **Down** and open **Menu → Settings**. Choose **On detect:
+Ask** to show the full-screen prompt. Press **Select** to start or **Back** to
+dismiss it. The prompt closes after two minutes. Change **Auto-detect** to **Off**
+to disable the worker. Both choices are saved on the watch. Pebble's built-in activity logging and GravelEx sync continue independently.
 
 ### Live map and watch stats
 

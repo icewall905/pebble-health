@@ -7,8 +7,17 @@
 enum { DETECT_NONE = -1, DETECT_RUN = 0, DETECT_WALK = 1 };
 enum { DETECTION_OFFER = 1, DETECTION_PHONE_RECORDING = 2 };
 // DETECTION_AUTO_START_KEY absent means on: a detected walk or run starts the phone recording unasked.
-enum { DETECTION_SPORT_KEY = 201, DETECTION_OFFER_TIME_KEY = 202, DETECTION_AUTO_START_KEY = 203 };
+enum {
+  DETECTION_SPORT_KEY = 201,
+  DETECTION_OFFER_TIME_KEY = 202,
+  DETECTION_AUTO_START_KEY = 204,
+  DETECTION_ENABLED_KEY = 205,
+};
 enum { DETECTION_REARM_SECONDS = 120, DETECTION_OFFER_SECONDS = 120 };
+
+static inline bool detection_offer_is_fresh(time_t now, time_t offered, time_t handled) {
+  return offered && offered != handled && now >= offered && now - offered < DETECTION_OFFER_SECONDS;
+}
 
 typedef struct {
   time_t last_movement;

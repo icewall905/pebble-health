@@ -6,6 +6,7 @@ static DetectionState detection;
 static time_t last_phone_recording;
 
 static void check_activity(void) {
+  if (persist_exists(DETECTION_ENABLED_KEY) && !persist_read_bool(DETECTION_ENABLED_KEY)) return;
   const time_t now = time(NULL);
   const HealthActivityMask activity = health_service_peek_current_activities();
   const int sport = activity & (HealthActivitySleep | HealthActivityOpenWorkout) ? DETECT_NONE :

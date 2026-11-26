@@ -14,7 +14,9 @@ static uint32_t mode, count, rest;
 static char title[32];
 static time_t received;
 static uint32_t token, menu_token, sequence;
-static bool has_token, sending, starting;
+static bool has_token, sending;
+static time_t start_deadline;
+enum { START_TIMEOUT_SECONDS = 20 };
 static bool wrist_requested, wrist_sampling, wrist_sampling_wanted;
 static time_t wrist_received;
 static unsigned wrist_bpm;
@@ -64,16 +66,30 @@ static bool auto_start(void) {
   return !persist_exists(DETECTION_AUTO_START_KEY) || persist_read_bool(DETECTION_AUTO_START_KEY);
 }
 
+static bool detection_enabled(void) {
+  return !persist_exists(DETECTION_ENABLED_KEY) || persist_read_bool(DETECTION_ENABLED_KEY);
+}
+
+static void start_detection_worker(void) {
+  if (app_worker_is_running()) return;
+  AppWorkerResult result = app_worker_launch();
+  if (result != APP_WORKER_RESULT_SUCCESS && result != APP_WORKER_RESULT_ALREADY_RUNNING &&
+      result != APP_WORKER_RESULT_ASKING_CONFIRMATION)
+    show_notice("Could not enable");
+}
+
 static void toggle_detection(void) {
-  if (app_worker_is_running()) {
-    app_worker_kill();
-    show_notice("Stopping detection");
+  const bool enabled = !detection_enabled();
+  if (persist_write_bool(DETECTION_ENABLED_KEY, enabled) < 0) {
+    show_notice("Could not save");
+    return;
+  }
+  if (enabled) {
+    start_detection_worker();
   } else {
-    AppWorkerResult result = app_worker_launch();
-    if (result == APP_WORKER_RESULT_SUCCESS || result == APP_WORKER_RESULT_ALREADY_RUNNING)
-      show_notice("Auto-detect enabled");
-    else if (result != APP_WORKER_RESULT_ASKING_CONFIRMATION)
-      show_notice("Could not enable");
+    persist_delete(DETECTION_OFFER_TIME_KEY);
+    if (app_worker_is_running()) app_worker_kill();
+    show_notice("Auto-detect off");
   }
 }
 #endif
@@ -84,13 +100,13 @@ static void show_notice(const char *message) {
   layer_mark_dirty(display);
 }
 
-static void send_command(unsigned command, unsigned argument) {
-  if (sending) return;
+static bool send_command(unsigned command, unsigned argument) {
+  if (sending || (command == START && start_deadline)) return false;
   DictionaryIterator *out;
   if (app_message_outbox_begin(&out) != APP_MSG_OK) {
     if (command == MEDIA_COMMAND) media_status("Try again");
     else show_notice("Try again");
-    return;
+    return false;
   }
   dict_write_uint8(out, 20, command);
   dict_write_uint8(out, 21, argument);
@@ -101,14 +117,17 @@ static void send_command(unsigned command, unsigned argument) {
     pending_command = command;
     sending = true;
     if (command == START) {
-      starting = true;
+      start_deadline = time(NULL) + START_TIMEOUT_SECONDS;
       show_notice("Starting on phone...");
+      notice_until = start_deadline;
     }
+    return true;
   } else if (command == MEDIA_COMMAND) {
     media_status("Phone unavailable");
   } else if (command < REQUEST_SENSORS) {
     show_notice("Could not reach phone");
   }
+  return false;
 }
 
 static bool phone_has_live_heart(time_t now) {
@@ -175,8 +194,8 @@ static void select_option(int index, void *context) {
   if (action == TOGGLE_AUTO_START) {
     window_stack_pop(true);
     const bool on = !auto_start();
-    persist_write_bool(DETECTION_AUTO_START_KEY, on);
-    show_notice(on ? "Auto-start on" : "Will ask first");
+    if (persist_write_bool(DETECTION_AUTO_START_KEY, on) < 0) show_notice("Could not save");
+    else show_notice(on ? "Auto-start on" : "Will ask first");
     return;
   }
 #endif
@@ -199,7 +218,10 @@ static void populate_menu(unsigned type) {
   } else if (type == SETTINGS) {
     section.title = "Settings";
 #if defined(PBL_HEALTH)
-    add_option(app_worker_is_running() ? "Auto-detect: On" : "Auto-detect: Off", TOGGLE_DETECTION);
+    const char *detection_status = "Auto-detect: Off";
+    if (detection_enabled())
+      detection_status = app_worker_is_running() ? "Auto-detect: On" : "Auto-detect: Paused";
+    add_option(detection_status, TOGGLE_DETECTION);
     add_option(auto_start() ? "On detect: Start" : "On detect: Ask", TOGGLE_AUTO_START);
 #else
     add_option("No auto-detection", 0);
@@ -328,6 +350,7 @@ static void detected_expired(void *context) {
 }
 
 static void detected_accept(ClickRecognizerRef recognizer, void *context) {
+  if (sending || start_deadline) return;
   const int sport = detected_sport;
   close_detected(false);
   send_command(START, sport);
@@ -353,30 +376,28 @@ static void create_detected_window(void) {
 }
 
 static void offer_detection(void) {
-  if (window_stack_contains_window(utilities_window) || window_stack_contains_window(options_window) ||
-      window_stack_contains_window(detected_window)) {
+  detection_pending = false;
+  if (!detection_enabled() || !app_worker_is_running()) return;
+  const time_t now = time(NULL);
+  const time_t offered = persist_read_int(DETECTION_OFFER_TIME_KEY);
+  if (!detection_offer_is_fresh(now, offered, last_detection_offer) ||
+      (received && state < 2 && now - received <= 8)) return;
+  const int sport = persist_read_int(DETECTION_SPORT_KEY);
+  if (sport != DETECT_RUN && sport != DETECT_WALK) return;
+
+  // AppMessage has one outbox. Keep the offer pending while it or another screen is in use.
+  if (sending || start_deadline || window_stack_get_top_window() != window) {
     detection_pending = true;
     return;
   }
-  detection_pending = false;
-  if (!app_worker_is_running() || starting ||
-      (received && state < 2 && time(NULL) - received <= 8)) return;
-  const time_t now = time(NULL);
-  const time_t offered = persist_read_int(DETECTION_OFFER_TIME_KEY);
-  if (!offered || offered == last_detection_offer || now < offered ||
-      now - offered >= DETECTION_OFFER_SECONDS) return;
-  const int sport = persist_read_int(DETECTION_SPORT_KEY);
-  if (sport != DETECT_RUN && sport != DETECT_WALK) return;
   last_detection_offer = offered;
   detected_sport = sport;
-  if (auto_start()) {
-    // send_command shows "Starting on phone..." and the phone's reply drives the workout screen.
+  if (auto_start() && send_command(START, sport)) {
     vibes_double_pulse();
-    send_command(START, sport);
     return;
   }
   layer_mark_dirty(detected_display);
-  if (!window_stack_contains_window(detected_window)) window_stack_push(detected_window, true);
+  window_stack_push(detected_window, true);
   vibes_long_pulse();
   light_enable_interaction();
   if (!detected_timer) detected_timer = app_timer_register(DETECTED_PROMPT_MS, detected_expired, NULL);
@@ -388,7 +409,7 @@ static void detection_message(uint16_t type, AppWorkerMessage *message) {
 #endif
 
 static void open_options(ClickRecognizerRef recognizer, void *context) {
-  if (sending && pending_command < REQUEST_SENSORS) return;
+  if (start_deadline || (sending && pending_command < REQUEST_SENSORS)) return;
   if (page == HISTORY && history_count) {
     page = HISTORY_DETAIL;
     layer_mark_dirty(display);
@@ -490,7 +511,10 @@ static void click_config(void *context) {
 
 static void outbox_sent(DictionaryIterator *iter, void *context) {
   sending = false;
-  if (pending_command == START && starting) show_notice("Waiting for recording");
+  if (pending_command == START && start_deadline) {
+    show_notice("Waiting for recording");
+    notice_until = start_deadline;
+  }
   if (pending_command == MEDIA_COMMAND) media_status("Sent to phone");
 }
 
@@ -498,9 +522,11 @@ static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, voi
   sending = false;
   if (pending_command == MEDIA_COMMAND) {
     media_status("Phone unavailable");
+  } else if (pending_command == START) {
+    start_deadline = 0;
+    show_notice("Check phone to start");
   } else if (pending_command < REQUEST_SENSORS) {
-    show_notice(starting ? "Check phone to start" : "Command not delivered");
-    starting = false;
+    show_notice("Command not delivered");
   }
 }
 
@@ -967,9 +993,9 @@ static void inbox(DictionaryIterator *iter, void *context) {
   has_token = session && session->type == TUPLE_UINT && session->length == 4;
   if (has_token) token = session->value->uint32 & SESSION_TOKEN_MASK;
   wrist_requested = has_token && state == 0 && (session->value->uint32 & HEART_REQUEST_BIT);
-  if (starting || (first_update && page == HOME && state < 2)) {
+  if (state < 2 && (start_deadline || (first_update && page == HOME))) {
     page = WORKOUT;
-    starting = false;
+    start_deadline = 0;
     notice_until = 0;
   }
   received = time(NULL);
@@ -987,14 +1013,18 @@ static void inbox(DictionaryIterator *iter, void *context) {
 static void tick(struct tm *current_time, TimeUnits units) {
   const time_t clock = time(NULL);
   update_wrist_sampling(clock);
+  if (start_deadline && clock >= start_deadline) {
+    start_deadline = 0;
+    show_notice("Check phone to start");
+  }
 #if defined(PBL_HEALTH)
-  if (detection_pending && !window_stack_contains_window(utilities_window)) offer_detection();
+  if (detection_pending) offer_detection();
 #endif
-  if (!sending && page == SENSORS && clock - sensor_request >= 8) {
+  if (!sending && window_stack_get_top_window() == window && page == SENSORS && clock - sensor_request >= 8) {
     sensor_request = clock;
     send_command(REQUEST_SENSORS, 0);
   }
-  if (!sending && page == HISTORY && !history_request) {
+  if (!sending && window_stack_get_top_window() == window && page == HISTORY && !history_request) {
     history_request = clock;
     send_command(REQUEST_HISTORY, 0);
   }
@@ -1020,6 +1050,11 @@ int main(void) {
   layer_set_update_proc(display, draw);
   layer_add_child(root, display);
   window_stack_push(window, false);
+#if defined(PBL_HEALTH)
+  // Version 1.9.6 shared the history key with the Start/Ask preference.
+  if (!persist_exists(DETECTION_AUTO_START_KEY) && persist_get_size(HISTORY_KEY) == sizeof(bool))
+    persist_write_bool(DETECTION_AUTO_START_KEY, persist_read_bool(HISTORY_KEY));
+#endif
   const int cached = persist_read_data(HISTORY_KEY, history, sizeof(history));
   if (cached > 0 && (size_t)cached <= sizeof(history) && cached % HISTORY_ROW == 0)
     history_count = cached / HISTORY_ROW;
@@ -1031,6 +1066,7 @@ int main(void) {
 #if defined(PBL_HEALTH)
   app_worker_message_subscribe(detection_message);
   health_service_events_subscribe(on_watch_heart, NULL);
+  if (detection_enabled()) start_detection_worker();
   if (launch_reason() == APP_LAUNCH_WORKER) offer_detection();
 #endif
   app_event_loop();
